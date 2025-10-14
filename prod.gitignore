@@ -5,7 +5,7 @@
 *.7z
 *.mp3
 *.wav
-*.sublime-workspace
+*.sublime*
 .hg/
 build/
 *.hgignore
@@ -17,3 +17,5 @@ __pycache__/
 *.log
 *.ini
 psqlc/
+psqlc.py
+setup.py
