@@ -289,7 +289,7 @@ setup(
     ],
     keywords='postgresql, automation, analytics, developer tools, monitoring, devops',
     python_requires='>=3.6',
-    install_requires=['rich', 'psycopg2', 'licface', 'envdot'],
+    install_requires=['rich', 'asyncpg', 'licface', 'envdot', 'pwinput'],
     entry_points={
         'console_scripts': [
             'psqlc=psqlc.psqlc:main',

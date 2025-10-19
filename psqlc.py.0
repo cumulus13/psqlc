@@ -1,0 +1,1186 @@
+#!/usr/bin/env python3
+# Author: Hadi Cahyadi <cumulus13@gmail.com>
+# Date: 2025-10-14
+# Description: Production-ready PostgreSQL management CLI tool
+# License: MIT
+
+import argparse
+import psycopg2
+from psycopg2 import sql, errors
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from licface import CustomRichHelpFormatter
+import sys
+import traceback
+import os
+import importlib
+from rich.console import Console
+from rich.table import Table
+from rich.style import Style
+from rich.text import Text
+from rich.panel import Panel
+from typing import Optional, Dict, Any, List
+import getpass
+from datetime import datetime
+from envdot import load_env
+from pathlib import Path
+from functools import lru_cache
+
+HOST = "127.0.0.1"
+
+console = Console()
+
+def rich_print(msg: str, color: str = "#FFFFFF", bgcolor: str | None = None, bold: bool = False, end: str = "\n"):
+    """Print text with hex color using Rich"""
+    style_kwargs = {"color": color}
+    if bgcolor:
+        style_kwargs["bgcolor"] = bgcolor
+    if bold:
+        style_kwargs["bold"] = True
+    style = Style(**style_kwargs)
+    console.print(Text(msg, style=style), end=end)
+
+
+def load_settings_from_path(path):
+    """Dynamically import a settings.py file from any path"""
+    spec = importlib.util.spec_from_file_location("settings_module", path)
+    settings = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(settings)
+    return settings
+
+
+def find_settings_recursive(start_path=None, max_depth=5, filename='settings.py'):
+    """
+    Recursively search for settings.py file downwards from start_path
+    Returns the full path to settings.py if found, None otherwise
+    """
+    if start_path is None:
+        start_path = os.getcwd()
+
+    # Ensure start_path is string
+    start_path = str(start_path)
+
+    def search_directory(path, current_depth=0, filename=filename):
+        if current_depth > max_depth:
+            return None
+
+        # Check if settings.py exists in current directory
+        settings_path = os.path.join(path, filename)
+        if os.path.isfile(settings_path):
+            return settings_path
+
+        # Search in subdirectories
+        try:
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                # Skip hidden directories and common non-project directories
+                # if os.path.isdir(item_path) and not item.startswith('.') and item not in ['node_modules', 'venv', '__pycache__', 'env']:
+                if os.path.isdir(item_path) and item not in ['node_modules', 'venv', '__pycache__'] and '-env' not in item:
+                    result = search_directory(item_path, current_depth + 1)
+                    if result:
+                        return result
+        except (PermissionError, OSError):
+            pass
+
+        return None
+
+    return search_directory(start_path, filename=filename)
+
+
+@lru_cache(maxsize=1)
+def parse_django_settings(settings_path=None):
+    """
+    Parse Django settings.py to extract database configuration
+    Returns dict with username, password, database, host, port or None
+    """
+    try:
+        if settings_path is None:
+            # Try current directory first
+            current_settings = os.path.join(os.getcwd(), "settings.py")
+            if os.path.isfile(current_settings):
+                settings_path = current_settings
+            else:
+                # Search recursively
+                settings_path = find_settings_recursive()
+
+        if not settings_path or not os.path.isfile(settings_path):
+            default_files = [".env", ".json", ".yaml"]
+            for cf in default_files:
+                settings_path = find_settings_recursive(filename=cf)
+                if settings_path:
+                    break
+        if not settings_path or not os.path.isfile(settings_path):
+            return None
+
+        if settings_path:
+            if settings_path.endswith('settings.py') or settings_path == 'settings.py' or 'settings.py' in settings_path:
+                settings = load_settings_from_path(settings_path)
+                databases_obj = getattr(settings, "DATABASES", None)
+
+                if databases_obj:
+                    for db_key, cfg in databases_obj.items():
+                        if cfg.get("ENGINE") == "django.db.backends.postgresql":
+                            rich_print(f"📄 Found settings.py at: {settings_path}", color="#00CED1")
+                            return {
+                                    'username': cfg.get("USER"),
+                                    'password': cfg.get("PASSWORD"),
+                                    'database': cfg.get("NAME"),
+                                    'host': cfg.get("HOST"),
+                                    'port': cfg.get("PORT")
+                                }
+            else:
+                cfg = load_env(settings_path)
+                for key in ['engine', 'ENGINE', 'TYPE', 'type']:
+                    if cfg.get(key) in ["django.db.backends.postgresql", "postgresql", "psql"]:
+                        rich_print(f"📄 Found settings.py at: {settings_path}", color="#00CED1")
+                        return {
+                            'username': cfg.get("USER") or cfg.get("user") or cfg.get("username") or cfg.get("USERNAME"),
+                            'password': cfg.get("PASSWORD") or cfg.get("password") or cfg.get("pass") or cfg.get("PASS"),
+                            'database': cfg.get("NAME") or cfg.get("name") or cfg.get("db") or cfg.get("DB") or cfg.get("dbname") or cfg.get("DBNAME") or cfg.get("db_name") or cfg.get("DB_NAME"),
+                            'host': cfg.get("HOST") or cfg.get("host") or cfg.get("hostname"),
+                            'port': cfg.get("PORT") or cfg.get("port")
+                        }
+
+    except Exception as e:
+        # Silently ignore if settings.py not found or can't be parsed
+        if os.getenv("DEBUG", "0") == "1":
+            rich_print(f"⚠️ Debug - Error reading settings.py: {e}", color="#FFFF00")
+
+    return None
+
+
+def get_connection(host: str, port: int, user: str, password: str, dbname: str = "postgres", auto_settings: bool = True):
+    """
+    Create a database connection with error handling
+    Supports auto-detection from Django settings.py if credentials not provided
+    """
+    # Try to load from settings.py if user/password not provided
+    if auto_settings and (not user or user == "postgres") and not password:
+        db_config = parse_django_settings()
+        if db_config:
+            host = db_config.get('host') or host
+            port = db_config.get('port') or port
+            user = db_config.get('username') or user
+            password = db_config.get('password') or password
+            if dbname == "postgres" and db_config.get('database'):
+                dbname = db_config.get('database')
+
+    try:
+        conn = psycopg2.connect(
+            dbname=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=port,
+            connect_timeout=10
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        rich_print(f"❌ Connection failed: {e}", color="#FF4500", bold=True)
+        sys.exit(1)
+
+
+def show_databases(args):
+    """List all databases"""
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                datname AS database,
+                pg_size_pretty(pg_database_size(datname)) AS size,
+                pg_encoding_to_char(encoding) AS encoding,
+                datcollate AS collation
+            FROM pg_database
+            WHERE datistemplate = false
+            ORDER BY datname;
+        """)
+
+        results = cur.fetchall()
+
+        if not results:
+            rich_print("📭 No databases found", color="#FFFF00")
+            return
+
+        table = Table(title="PostgreSQL Databases", show_header=True, header_style="bold magenta")
+        table.add_column("Database", style="cyan")
+        table.add_column("Size", style="green")
+        table.add_column("Encoding", style="yellow")
+        table.add_column("Collation", style="blue")
+
+        for row in results:
+            table.add_row(*[str(val) for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def show_tables(args):
+    """List all tables in a database"""
+    if not args.database:
+        # Try to get database from settings.py
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            args.database,
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, args.database, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                schemaname AS schema,
+                tablename AS table,
+                pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size,
+                (SELECT COUNT(*) FROM information_schema.columns 
+                 WHERE table_schema = schemaname AND table_name = tablename) AS columns
+            FROM pg_tables
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY schemaname, tablename;
+        """)
+
+        results = cur.fetchall()
+
+        if not results:
+            rich_print(f"📭 No tables found in database '{args.database}'", color="#FFFF00")
+            return
+
+        table = Table(title=f"Tables in '{args.database}'", show_header=True, header_style="bold magenta")
+        table.add_column("Schema", style="cyan")
+        table.add_column("Table", style="green")
+        table.add_column("Size", style="yellow")
+        table.add_column("Columns", style="blue")
+
+        for row in results:
+            table.add_row(*[str(val) for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def show_users(args):
+    """List all database users/roles"""
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                rolname AS username,
+                rolsuper AS superuser,
+                rolcreatedb AS create_db,
+                rolcreaterole AS create_role,
+                rolcanlogin AS can_login,
+                rolreplication AS replication
+            FROM pg_roles
+            WHERE rolname NOT LIKE 'pg_%'
+            ORDER BY rolname;
+        """)
+
+        results = cur.fetchall()
+
+        table = Table(title="PostgreSQL Users", show_header=True, header_style="bold magenta")
+        table.add_column("Username", style="cyan")
+        table.add_column("Superuser", style="red")
+        table.add_column("Create DB", style="green")
+        table.add_column("Create Role", style="yellow")
+        table.add_column("Can Login", style="blue")
+        table.add_column("Replication", style="magenta")
+
+        for row in results:
+            table.add_row(*[str(val) for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def describe_table(args):
+    """Show table structure"""
+    if not args.database:
+        # Try to get database from settings.py
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    if not args.table:
+        rich_print("❌ Table name required. Use -t/--table", color="#FF4500", bold=True)
+        return
+
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            args.database,
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, args.database, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                column_name,
+                data_type,
+                character_maximum_length,
+                is_nullable,
+                column_default
+            FROM information_schema.columns
+            WHERE table_name = %s
+            ORDER BY ordinal_position;
+        """, (args.table,))
+
+        results = cur.fetchall()
+
+        if not results:
+            rich_print(f"❌ Table '{args.table}' not found in database '{args.database}'", 
+                       color="#FF4500", bold=True)
+            return
+
+        table = Table(title=f"Structure of '{args.table}'", show_header=True, header_style="bold magenta")
+        table.add_column("Column", style="cyan")
+        table.add_column("Type", style="green")
+        table.add_column("Max Length", style="yellow")
+        table.add_column("Nullable", style="blue")
+        table.add_column("Default", style="magenta")
+
+        for row in results:
+            table.add_row(*[str(val) if val is not None else "-" for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def execute_query(args):
+    """Execute a custom SQL query"""
+    if not args.database:
+        # Try to get database from settings.py
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    if not args.query:
+        rich_print("❌ Query required. Use -q/--query", color="#FF4500", bold=True)
+        return
+
+    # Security check - prevent destructive operations in read-only mode
+    if args.readonly:
+        dangerous_keywords = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE', 'INSERT', 'UPDATE']
+        query_upper = args.query.upper()
+        if any(keyword in query_upper for keyword in dangerous_keywords):
+            rich_print("❌ Destructive queries not allowed in read-only mode", 
+                       color="#FF4500", bold=True)
+            return
+
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            args.database,
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, args.database, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute(args.query)
+
+        # Check if query returns results
+        if cur.description:
+            results = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+
+            if not results:
+                rich_print("✅ Query executed successfully. No rows returned.", color="#00FF7F")
+                return
+
+            table = Table(title="Query Results", show_header=True, header_style="bold magenta")
+            for col in columns:
+                table.add_column(col, style="cyan")
+
+            # Limit rows displayed
+            max_rows = args.limit if hasattr(args, 'limit') and args.limit else 100
+            for row in results[:max_rows]:
+                table.add_row(*[str(val) if val is not None else "NULL" for val in row])
+
+            console.print(table)
+
+            if len(results) > max_rows:
+                rich_print(f"⚠️ Showing {max_rows} of {len(results)} rows", 
+                           color="#FFFF00", bold=True)
+        else:
+            conn.commit()
+            rich_print("✅ Query executed successfully", color="#00FF7F", bold=True)
+
+    except Exception as e:
+        rich_print(f"❌ Query error: {e}", color="#FF4500", bold=True)
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_user_db(args):
+    """Create PostgreSQL user and database"""
+    username = password = database = None
+    PORT = args.port or 5432
+    HOST = args.hostname
+
+    # Parse configuration with multiple methods
+    # CASE 1: Direct args (username password database)
+    if args.CONFIG and len(args.CONFIG) == 3:
+        username, password, database = args.CONFIG
+
+    # CASE 2: Django settings.py in current dir or recursive search
+    elif not args.username and not args.password and not args.database:
+        db_config = parse_django_settings()
+        if db_config:
+            username = db_config.get('username')
+            password = db_config.get('password')
+            database = db_config.get('database')
+            HOST = db_config.get('host') or HOST
+            PORT = db_config.get('port') or PORT
+
+    # CASE 3: settings.py explicit file path
+    elif args.CONFIG and len(args.CONFIG) == 1 and os.path.isfile(args.CONFIG[0]) and args.CONFIG[0].endswith("settings.py"):
+        db_config = parse_django_settings(args.CONFIG[0])
+        if db_config:
+            username = db_config.get('username')
+            password = db_config.get('password')
+            database = db_config.get('database')
+            HOST = db_config.get('host') or HOST
+            PORT = db_config.get('port') or PORT
+
+    # CASE 4: folder with settings.py
+    elif args.CONFIG and len(args.CONFIG) == 1 and os.path.isdir(args.CONFIG[0]):
+        settings_path = os.path.join(args.CONFIG[0], "settings.py")
+        if os.path.isfile(settings_path):
+            db_config = parse_django_settings(settings_path)
+            if db_config:
+                username = db_config.get('username')
+                password = db_config.get('password')
+                database = db_config.get('database')
+                HOST = db_config.get('host') or HOST
+                PORT = db_config.get('port') or PORT
+
+    # CASE 5: Fallback to manual args
+    if not username or not password or not database:
+        username = username or args.username
+        password = password or args.password
+        database = database or args.database
+
+    if not all([username, password, database]):
+        rich_print("❌ Missing required info (username, password, database)", color="#FF4500", bold=True)
+        sys.exit(1)
+
+    rich_print(f"🕵🏿 USERNAME: {username}", color="#00CED1", bold=True)
+    rich_print(f"🔑 PASSWORD: {'*****' if password else ''}", color="#FFFF00", bold=True)
+    rich_print(f"🧰 DATABASE: {database}", color="#00FF7F", bold=True)
+    rich_print(f"👻 HOSTNAME: {HOST}", color="#FFFFFF")
+    rich_print(f"🚢 PORT: {PORT}", color="#FFFFFF")
+
+    # Create user
+    try:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user=args.user,
+            host=HOST,
+            port=PORT,
+            password=args.passwd,
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        try:
+            cur.execute(
+                sql.SQL("CREATE USER {} WITH PASSWORD %s").format(sql.Identifier(username)),
+                [password],
+            )
+            rich_print(f"✅ User '{username}' created", color="#00FF7F", bold=True)
+        except errors.DuplicateObject:
+            rich_print(f"⚠️ User '{username}' already exists, skipping", color="#FFFF00", bold=True)
+
+        cur.execute(
+            sql.SQL("ALTER USER {} WITH LOGIN CREATEDB REPLICATION BYPASSRLS").format(sql.Identifier(username))
+        )
+        rich_print(f"✅ User '{username}' updated with privileges", color="#00FF7F", bold=True)
+
+        cur.close()
+        conn.close()
+        rich_print("🔒 Logged out from postgres superuser", color="#00CED1")
+
+    except Exception as e:
+        rich_print("❌ Error (superuser connection):", color="#FF4500", bold=True)
+        rich_print(str(e), color="#FF4500")
+        return
+
+    # Create database
+    try:
+        conn = psycopg2.connect(
+            dbname="template1", user=username, password=password, host=args.hostname, port=PORT
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
+        if cur.fetchone():
+            rich_print(f"⚠️ Database '{database}' already exists.", color="#FFFF00", bold=True)
+            rich_print(f"❓ Do you want to DROP and recreate database '{database}'? [y/N]: ",
+                       color="#FFFF00", bold=True, end="")
+            choice = input().strip().lower()
+            if choice == "y":
+                try:
+                    cur.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database)))
+                    rich_print(f"🗑️ Database '{database}' dropped", color="#FF4500", bold=True)
+                    cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+                    rich_print(f"✅ Database '{database}' recreated", color="#00FF7F", bold=True)
+                except Exception as e:
+                    rich_print(f"❌ Error dropping/creating database: {e}", color="#FF4500", bold=True)
+            else:
+                rich_print(f"⏭️ Skipping database creation for '{database}'", color="#FFFF00", bold=True)
+        else:
+            try:
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
+                rich_print(f"✅ Database '{database}' created", color="#00FF7F", bold=True)
+            except errors.DuplicateDatabase:
+                rich_print(f"⚠️ Database '{database}' already exists, skipping", color="#FFFF00", bold=True)
+
+        cur.close()
+        conn.close()
+        rich_print("🔒 Logged out from new user session", color="#00CED1")
+
+    except Exception as e:
+        if os.getenv("TRACEBACK", "0").lower() in ["1", "true", "yes"]:
+            print(traceback.format_exc())
+        else:
+            rich_print("❌ Error (new user connection):", color="#FF4500", bold=True)
+            rich_print(str(e), color="#FF4500")
+
+
+def backup_database(args):
+    """Create a database backup using pg_dump"""
+    if not args.database:
+        # Try to get database from settings.py
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"{args.database}_backup_{timestamp}.sql"
+
+    rich_print(f"🗄️ Creating backup of '{args.database}'...", color="#00CED1", bold=True)
+
+    cmd = f"pg_dump -h {args.hostname} -p {args.port} -U {args.user} -d {args.database} -F p -f {backup_file}"
+
+    rich_print(f"💡 Run this command manually:", color="#FFFF00")
+    rich_print(f"   {cmd}", color="#00FF7F")
+
+
+def show_connections(args):
+    """Show active database connections"""
+    # Try to get config from settings.py if available
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            SELECT 
+                datname AS database,
+                usename AS username,
+                client_addr AS client,
+                state,
+                query_start,
+                state_change
+            FROM pg_stat_activity
+            WHERE datname IS NOT NULL
+            ORDER BY query_start DESC;
+        """)
+
+        results = cur.fetchall()
+
+        if not results:
+            rich_print("📭 No active connections", color="#FFFF00")
+            return
+
+        table = Table(title="Active Connections", show_header=True, header_style="bold magenta")
+        table.add_column("Database", style="cyan")
+        table.add_column("User", style="green")
+        table.add_column("Client", style="yellow")
+        table.add_column("State", style="blue")
+        table.add_column("Query Start", style="magenta")
+        table.add_column("State Change", style="red")
+
+        for row in results:
+            table.add_row(*[str(val) if val is not None else "-" for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def show_indexes(args):
+    """Show indexes in a table or database"""
+    if not args.database:
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            args.database,
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, args.database, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        if args.table:
+            # Show indexes for specific table
+            cur.execute("""
+                SELECT
+                    indexname AS index_name,
+                    indexdef AS definition
+                FROM pg_indexes
+                WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+                AND tablename = %s
+                ORDER BY indexname;
+            """, (args.table,))
+            title = f"Indexes in table '{args.table}'"
+        else:
+            # Show all indexes in database
+            cur.execute("""
+                SELECT
+                    schemaname AS schema,
+                    tablename AS table,
+                    indexname AS index_name,
+                    indexdef AS definition
+                FROM pg_indexes
+                WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY schemaname, tablename, indexname;
+            """)
+            title = f"Indexes in database '{args.database}'"
+
+        results = cur.fetchall()
+
+        if not results:
+            rich_print(f"📭 No indexes found", color="#FFFF00")
+            return
+
+        table = Table(title=title, show_header=True, header_style="bold magenta")
+
+        if args.table:
+            table.add_column("Index Name", style="cyan")
+            table.add_column("Definition", style="green")
+        else:
+            table.add_column("Schema", style="cyan")
+            table.add_column("Table", style="green")
+            table.add_column("Index Name", style="yellow")
+            table.add_column("Definition", style="blue")
+
+        for row in results:
+            table.add_row(*[str(val) if val is not None else "-" for val in row])
+
+        console.print(table)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def show_size(args):
+    """Show database or table sizes"""
+    if not args.database:
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            # Show all database sizes
+            db_config = parse_django_settings() if not args.passwd else None
+
+            if db_config and not args.passwd:
+                conn = get_connection(
+                    db_config.get('host') or args.hostname,
+                    db_config.get('port') or args.port,
+                    db_config.get('username') or args.user,
+                    db_config.get('password'),
+                    auto_settings=False
+                )
+            else:
+                conn = get_connection(args.hostname, args.port, args.user, args.passwd, auto_settings=False)
+
+            cur = conn.cursor()
+
+            try:
+                cur.execute("""
+                    SELECT
+                        datname AS database,
+                        pg_size_pretty(pg_database_size(datname)) AS size,
+                        pg_database_size(datname) AS size_bytes
+                    FROM pg_database
+                    WHERE datistemplate = false
+                    ORDER BY pg_database_size(datname) DESC;
+                """)
+
+                results = cur.fetchall()
+
+                table = Table(title="Database Sizes", show_header=True, header_style="bold magenta")
+                table.add_column("Database", style="cyan")
+                table.add_column("Size", style="green")
+
+                total_size = 0
+                for row in results:
+                    table.add_row(row[0], row[1])
+                    total_size += row[2]
+
+                console.print(table)
+                rich_print(f"\n📊 Total Size: {total_size / (1024**3):.2f} GB", color="#00CED1", bold=True)
+
+            except Exception as e:
+                rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+            finally:
+                cur.close()
+                conn.close()
+            return
+
+    db_config = parse_django_settings() if not args.passwd else None
+
+    if db_config and not args.passwd:
+        conn = get_connection(
+            db_config.get('host') or args.hostname,
+            db_config.get('port') or args.port,
+            db_config.get('username') or args.user,
+            db_config.get('password'),
+            args.database,
+            auto_settings=False
+        )
+    else:
+        conn = get_connection(args.hostname, args.port, args.user, args.passwd, args.database, auto_settings=False)
+
+    cur = conn.cursor()
+
+    try:
+        if args.table:
+            # Show size for specific table
+            cur.execute("""
+                SELECT
+                    pg_size_pretty(pg_total_relation_size(%s)) AS total_size,
+                    pg_size_pretty(pg_relation_size(%s)) AS table_size,
+                    pg_size_pretty(pg_total_relation_size(%s) - pg_relation_size(%s)) AS indexes_size
+            """, (args.table, args.table, args.table, args.table))
+
+            result = cur.fetchone()
+
+            if result:
+                rich_print(f"\n📊 Size of table '{args.table}':", color="#00CED1", bold=True)
+                rich_print(f"   Total Size:   {result[0]}", color="#00FF7F")
+                rich_print(f"   Table Size:   {result[1]}", color="#FFFF00")
+                rich_print(f"   Indexes Size: {result[2]}", color="#FF69B4")
+            else:
+                rich_print(f"❌ Table '{args.table}' not found", color="#FF4500", bold=True)
+        else:
+            # Show sizes for all tables
+            cur.execute("""
+                SELECT
+                    schemaname AS schema,
+                    tablename AS table,
+                    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS total_size,
+                    pg_total_relation_size(schemaname||'.'||tablename) AS size_bytes
+                FROM pg_tables
+                WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
+            """)
+
+            results = cur.fetchall()
+
+            if not results:
+                rich_print(f"📭 No tables found in database '{args.database}'", color="#FFFF00")
+                return
+
+            table = Table(title=f"Table Sizes in '{args.database}'", show_header=True, header_style="bold magenta")
+            table.add_column("Schema", style="cyan")
+            table.add_column("Table", style="green")
+            table.add_column("Total Size", style="yellow")
+
+            total_size = 0
+            for row in results:
+                table.add_row(row[0], row[1], row[2])
+                total_size += row[3]
+
+            console.print(table)
+            rich_print(f"\n📊 Total Size: {total_size / (1024**3):.2f} GB", color="#00CED1", bold=True)
+
+    except Exception as e:
+        rich_print(f"❌ Error: {e}", color="#FF4500", bold=True)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def drop_database(args):
+    """Drop a database (with confirmation)"""
+    if not args.database:
+        db_config = parse_django_settings()
+        if db_config and db_config.get('database'):
+            args.database = db_config.get('database')
+            rich_print(f"📄 Using database from settings.py: {args.database}", color="#00CED1")
+        else:
+            rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
+            return
+
+    # Safety confirmation
+    rich_print(f"⚠️  WARNING: You are about to DROP database '{args.database}'", color="#FF4500", bold=True)
+    rich_print(f"❓ Type the database name to confirm: ", color="#FFFF00", bold=True, end="")
+    confirmation = input().strip()
+
+    if confirmation != args.database:
+        rich_print("❌ Database name mismatch. Aborted.", color="#FF4500", bold=True)
+        return
+
+    try:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user=args.user,
+            host=args.hostname,
+            port=args.port,
+            password=args.passwd,
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        # Terminate all connections to the database
+        cur.execute("""
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = %s AND pid <> pg_backend_pid()
+        """, (args.database,))
+
+        # Drop the database
+        cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(args.database)))
+
+        rich_print(f"✅ Database '{args.database}' dropped successfully", color="#00FF7F", bold=True)
+
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        rich_print(f"❌ Error dropping database: {e}", color="#FF4500", bold=True)
+
+
+def drop_user(args):
+    """Drop a user/role (with confirmation)"""
+    if not args.username:
+        rich_print("❌ Username required. Use -u/--username", color="#FF4500", bold=True)
+        return
+
+    # Safety confirmation
+    rich_print(f"⚠️  WARNING: You are about to DROP user '{args.username}'", color="#FF4500", bold=True)
+    rich_print(f"❓ Type the username to confirm: ", color="#FFFF00", bold=True, end="")
+    confirmation = input().strip()
+
+    if confirmation != args.username:
+        rich_print("❌ Username mismatch. Aborted.", color="#FF4500", bold=True)
+        return
+
+    try:
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user=args.user,
+            host=args.hostname,
+            port=args.port,
+            password=args.passwd,
+        )
+        conn.autocommit = True
+        cur = conn.cursor()
+
+        # Drop the user
+        cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(args.username)))
+
+        rich_print(f"✅ User '{args.username}' dropped successfully", color="#00FF7F", bold=True)
+
+        cur.close()
+        conn.close()
+
+    except Exception as e:
+        rich_print(f"❌ Error dropping user: {e}", color="#FF4500", bold=True)
+
+def get_version():
+    """Get version from __version__.py file"""
+    try:
+        version_file = Path(__file__).parent / "__version__.py"
+        if not version_file.is_file():
+            version_file = Path(__file__).parent / NAME / "__version__.py"
+        if version_file.is_file():
+            with open(version_file, "r") as f:
+                for line in f:
+                    if line.strip().startswith("version"):
+                        parts = line.split("=")
+                        if len(parts) == 2:
+                            return parts[1].strip().strip('"').strip("'")
+    except Exception as e:
+        if os.getenv('TRACEBACK') and os.getenv('TRACEBACK') in ['1', 'true', 'True']:
+            print(traceback.format_exc())
+        else:
+            print(f"ERROR: {e}")
+    return "2.0"
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Production-ready PostgreSQL management CLI tool",
+        formatter_class=CustomRichHelpFormatter,
+        prog='psqlc'
+    )
+
+    # Global options (shown at top level)
+    parser.add_argument("-H", "--hostname", help=f"PostgreSQL server address (default: {HOST})", default=HOST)
+    parser.add_argument("-U", "--user", help="PostgreSQL superuser (default: postgres)", default="postgres")
+    parser.add_argument("-P", "--passwd", help="PostgreSQL superuser password")
+    parser.add_argument("--port", help="PostgreSQL server port (default: 5432)", default=5432, type=int)
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument('-v', "--version", action="store_true", help="Show version")
+
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # SHOW command with sub-subparsers
+    show_parser = subparsers.add_parser('show', help='Show database information', formatter_class=CustomRichHelpFormatter)
+    show_subparsers = show_parser.add_subparsers(dest='show_command', help='Show options')
+
+    # show dbs
+    show_dbs_parser = show_subparsers.add_parser('dbs', help='List all databases', formatter_class=CustomRichHelpFormatter)
+
+    # show tables
+    show_tables_parser = show_subparsers.add_parser('tables', help='List tables in database', formatter_class=CustomRichHelpFormatter)
+    show_tables_parser.add_argument("-d", "--database", help="Database name (auto-detect from settings.py if not provided)")
+
+    # show users
+    show_users_parser = show_subparsers.add_parser('users', help='List all users/roles', formatter_class=CustomRichHelpFormatter)
+
+    # show connections
+    show_conn_parser = show_subparsers.add_parser('connections', help='Show active connections', formatter_class=CustomRichHelpFormatter)
+
+    # show indexes
+    show_indexes_parser = show_subparsers.add_parser('indexes', help='Show indexes in database or table', formatter_class=CustomRichHelpFormatter)
+    show_indexes_parser.add_argument("-d", "--database", help="Database name (auto-detect from settings.py if not provided)")
+    show_indexes_parser.add_argument("-t", "--table", help="Table name (optional, show all if not provided)")
+
+    # show size
+    show_size_parser = show_subparsers.add_parser('size', help='Show database or table sizes', formatter_class=CustomRichHelpFormatter)
+    show_size_parser.add_argument("-d", "--database", help="Database name (auto-detect from settings.py if not provided)")
+    show_size_parser.add_argument("-t", "--table", help="Table name (optional, show all if not provided)")
+
+    # CREATE command
+    create_parser = subparsers.add_parser('create', help='Create user and database', formatter_class=CustomRichHelpFormatter)
+    create_parser.add_argument("CONFIG", help="Format: NEW_USERNAME NEW_PASSWORD NEW_DB", nargs="*")
+    create_parser.add_argument("-u", "--username", help="New PostgreSQL username")
+    create_parser.add_argument("-p", "--password", help="Password for new user")
+    create_parser.add_argument("-d", "--database", help="Database name to create")
+
+    # DESCRIBE command
+    desc_parser = subparsers.add_parser('describe', help='Show table structure', formatter_class=CustomRichHelpFormatter)
+    desc_parser.add_argument("-d", "--database", help="Database name (auto-detect from settings.py if not provided)")
+    desc_parser.add_argument("-t", "--table", help="Table name", required=True)
+
+    # QUERY command
+    query_parser = subparsers.add_parser('query', help='Execute SQL query', formatter_class=CustomRichHelpFormatter)
+    query_parser.add_argument("-d", "--database", help="Database name (auto-detect from settings.py if not provided)")
+    query_parser.add_argument("-q", "--query", help="SQL query to execute", required=True)
+    query_parser.add_argument("--readonly", action="store_true", help="Prevent destructive operations")
+    query_parser.add_argument("--limit", type=int, help="Limit number of rows displayed (default: 100)")
+
+    # BACKUP command
+    backup_parser = subparsers.add_parser('backup', help='Backup database', formatter_class=CustomRichHelpFormatter)
+    backup_parser.add_argument("-d", "--database", help="Database name to backup (auto-detect from settings.py if not provided)")
+
+    # DROP command with sub-subparsers
+    drop_parser = subparsers.add_parser('drop', help='Drop database or user', formatter_class=CustomRichHelpFormatter)
+    drop_subparsers = drop_parser.add_subparsers(dest='drop_command', help='Drop options')
+
+    # drop database
+    drop_db_parser = drop_subparsers.add_parser('database', help='Drop a database', formatter_class=CustomRichHelpFormatter)
+    drop_db_parser.add_argument("-d", "--database", help="Database name to drop (auto-detect from settings.py if not provided)")
+
+    # drop user
+    drop_user_parser = drop_subparsers.add_parser('user', help='Drop a user/role', formatter_class=CustomRichHelpFormatter)
+    drop_user_parser.add_argument("-u", "--username", help="Username to drop", required=True)
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args()
+
+    if args.version:
+        console.print(f"📦 [bold #FFFF00]Version:[/] [bold #00FFFF]{get_version()}[/]")
+        sys.exit(0)
+
+    # Set debug mode
+    if hasattr(args, 'debug') and args.debug:
+        os.environ["DEBUG"] = "1"
+
+    # Prompt for password if not provided
+    if not args.passwd and args.command:
+        # Check if we can get password from settings.py first
+        db_config = parse_django_settings()
+        if db_config and db_config.get('password'):
+            args.passwd = db_config.get('password')
+            if os.getenv("DEBUG", "0") == "1":
+                rich_print("🔐 Using password from settings.py", color="#00CED1")
+        else:
+            args.passwd = getpass.getpass(f"Password for {args.user}: ")
+
+    # Route to appropriate function
+    if args.command == 'create':
+        create_user_db(args)
+    elif args.command == 'show':
+        if args.show_command == 'dbs':
+            show_databases(args)
+        elif args.show_command == 'tables':
+            show_tables(args)
+        elif args.show_command == 'users':
+            show_users(args)
+        elif args.show_command == 'connections':
+            show_connections(args)
+        elif args.show_command == 'indexes':
+            show_indexes(args)
+        elif args.show_command == 'size':
+            show_size(args)
+        else:
+            show_parser.print_help()
+    elif args.command == 'describe':
+        describe_table(args)
+    elif args.command == 'query':
+        execute_query(args)
+    elif args.command == 'backup':
+        backup_database(args)
+    elif args.command == 'drop':
+        if args.drop_command == 'database':
+            drop_database(args)
+        elif args.drop_command == 'user':
+            drop_user(args)
+        else:
+            drop_parser.print_help()
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

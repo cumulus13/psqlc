@@ -1,4 +1,6 @@
 rich
-psycopg2
+#psycopg2
+asyncpg
 licface
 envdot
+pwinput
