@@ -84,6 +84,7 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
     """Parse Django settings.py or config files for database configuration"""
     global _settings_cache
     
+
     if _settings_cache is not None:
         return _settings_cache
     logger.debug(f"settings_path: {settings_path}")
@@ -108,9 +109,12 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
             return None
         # print(f"settings_path: {settings_path}")
         # Parse settings.py
-        logger.warning(f"CHECK [1]: {settings_path.endswith('settings.py') or 'settings.py' in settings_path}")
-        if settings_path.endswith('settings.py') or 'settings.py' in settings_path:
-            settings = load_settings_from_path(settings_path)
+
+        final_path = settings_path
+
+        logger.warning(f"CHECK [1]: {final_path.endswith('settings.py') or 'settings.py' in final_path}")
+        if final_path.endswith('settings.py') or 'settings.py' in final_path:
+            settings = load_settings_from_path(final_path)
             logger.info(f"settings: {settings}")
             databases_obj = getattr(settings, "DATABASES", None)
             logger.info(f"databases_obj: {databases_obj}")
@@ -119,9 +123,9 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
 
             if databases_obj:
                 for db_key, cfg in databases_obj.items():
-                    if cfg.get("ENGINE") == "django.db.backends.postgresql":
+                    if cfg.get("ENGINE") == "django.db.backends.postgresql" or cfg.get("ENGINE") == "postgresql" or cfg.get("ENGINE") == ".postgresql":
                         engine = cfg.get("ENGINE")
-                        rich_print(f"📄 Found settings at: {settings_path}", color="#00CED1")
+                        rich_print(f"📄 Found settings at: {final_path}", color="#00CED1")
                         _settings_cache = {
                             'username': cfg.get("USER"),
                             'password': cfg.get("PASSWORD"),
@@ -132,16 +136,19 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                         # print(f"_settings_cache: {_settings_cache}")
                         return _settings_cache
             if engine != "django.db.backends.postgresql":
-                print(f"❌ [bold #FFFF00]`settings.py` found but engine is[/] [bold #00FFFF]'{engine}'[/]")
+                from rich.console import Console
+                console = Console()
+    
+                console.print(f"❌ [bold #FFFF00]`settings.py` found but engine is[/] [bold #00FFFF]'{engine}'[/]")
         
         # Parse .env, .json, .yaml
         else:
             from envdot import load_env
-            cfg = load_env(settings_path)
+            cfg = load_env(final_path)
             
             for key in ['engine', 'ENGINE', 'TYPE', 'type']:
                 if cfg.get(key) in ["django.db.backends.postgresql", "postgresql", "psql"]:
-                    rich_print(f"📄 Found config at: {settings_path}", color="#00CED1")
+                    rich_print(f"📄 Found config at: {final_path}", color="#00CED1")
                     _settings_cache = {
                         'username': (cfg.get("USER") or cfg.get("user") or 
                                    cfg.get("username") or cfg.get("USERNAME")),
@@ -188,7 +195,7 @@ def get_version() -> str:
 # ============================================================================
 
 async def get_connection(host: str, port: int, user: str, password: str, 
-                        database: str = "postgres", auto_settings: bool = True):
+                        database: str = "postgres", auto_settings: bool = True, settings_path = None):
     """Create async database connection"""
     import asyncpg
     
@@ -203,8 +210,17 @@ async def get_connection(host: str, port: int, user: str, password: str,
             if db_config.get('database'): database = db_config.get('database')
             database = database or os.getenv('DATABASE') or os.getenv('DB_NAME') or os.getenv('DB')
     else:
+        for cf in [".env", ".json", ".yaml"]:
+            settings_path = find_settings_recursive(filename=cf)
+            if settings_path:
+                break
+        
+        if not settings_path or not os.path.isfile(settings_path):
+            rich_print(f'❌ env file (".env", ".json", ".yaml") not Found !', color='bold red')
+            return None
+
         from envdot import load_env
-        cfg = load_env()
+        cfg = load_env(settings_path)
         
         for key in ['engine', 'ENGINE', 'TYPE', 'type']:
             if cfg.get(key) in ["django.db.backends.postgresql", "postgresql", "psql"]:
