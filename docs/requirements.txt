@@ -12,6 +12,7 @@ asyncpg
 licface
 envdot
 pwinput
+version_get
 
 # Additional documentation tools
 sphinxcontrib-napoleon>=0.7
