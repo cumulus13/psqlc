@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psqlc"
-version = "1.1.6"
+version = "1.1.7"
 description = "Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats."
 readme = "README.md"
 readme-content-type = "text/markdown"
@@ -14,7 +14,7 @@ authors = [
 ]
 
 requires-python = ">=3.6"
-license = { text = "MIT" }
+license = "MIT"
 
 keywords = [
     "postgresql",
