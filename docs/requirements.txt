@@ -12,7 +12,6 @@ asyncpg
 licface
 envdot
 pwinput
-psqlc
 
 # Additional documentation tools
 sphinxcontrib-napoleon>=0.7
