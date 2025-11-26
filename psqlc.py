@@ -844,6 +844,7 @@ async def execute_query(args):
 async def create_user_db(args):
     """Create PostgreSQL user and database"""
     import asyncpg
+    from pwinput import pwinput
     
     username = password = database = None
     PORT = args.port or DEFAULT_PORT
