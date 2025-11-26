@@ -308,7 +308,7 @@ setup(
         'Operating System :: OS Independent',
         'Environment :: Console',
     ],
-    keywords='postgresql, automation, analytics, developer tools, monitoring, devops',
+    keywords='postgresql, automation, analytics, developer tools, monitoring, devops, django, asyncpg, dotenv',
     python_requires='>=3.6',
     install_requires=['rich', 'asyncpg', 'licface', 'envdot', 'pwinput'],
     entry_points={

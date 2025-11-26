@@ -22,7 +22,10 @@ keywords = [
     "analytics",
     "developer tools",
     "monitoring",
-    "devops"
+    "devops",
+    "django",
+    "asyncpg",
+    "dotenv"
 ]
 
 classifiers = [
