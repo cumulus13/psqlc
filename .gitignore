@@ -22,3 +22,9 @@ psqlc/
 
 # Added entries (1 items)
 _build/
+
+# Added entries (4 items)
+psqltools.sublime-project
+*.0
+*.backup
+build.bat
