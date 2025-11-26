@@ -13,8 +13,8 @@ try:
     logger = setup_logging()
 except:
     import logging
-    logger = logging.getLogger(__main__)
-    
+    logger = logging.getLogger()
+
 os.environ.update({'NO_LOGGING':'1'})
 
 HOST = "127.0.0.1"
