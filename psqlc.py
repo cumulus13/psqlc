@@ -97,11 +97,12 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                 settings_path = find_settings_recursive()
         
         logger.debug(f"settings_path: {settings_path}")
-        logger.info(f"os.path.isfile(settings_path): {os.path.isfile(settings_path)}")
+        if settings_path: logger.info(f"os.path.isfile(settings_path): {os.path.isfile(settings_path)}")
 
         if not settings_path or not os.path.isfile(settings_path):
             for cf in [".env", ".json", ".yaml"]:
                 settings_path = find_settings_recursive(filename=cf)
+                logger.notice(f"settings_path: {settings_path}")
                 if settings_path:
                     break
         
@@ -111,9 +112,12 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
         # Parse settings.py
 
         final_path = settings_path
+        logger.emergency(f"final_path: {final_path}")
+        logger.emergency(f"final_path is file: {os.path.isfile(final_path)}")
 
         logger.warning(f"CHECK [1]: {final_path.endswith('settings.py') or 'settings.py' in final_path}")
         if final_path.endswith('settings.py') or 'settings.py' in final_path:
+            logger.alert(f"processsing 'settings.py' in final_path ...")
             settings = load_settings_from_path(final_path)
             logger.info(f"settings: {settings}")
             databases_obj = getattr(settings, "DATABASES", None)
@@ -123,17 +127,18 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
 
             if databases_obj:
                 for db_key, cfg in databases_obj.items():
-                    if cfg.get("ENGINE") == "django.db.backends.postgresql" or cfg.get("ENGINE") == "postgresql" or cfg.get("ENGINE") == ".postgresql":
+                    if cfg.get("ENGINE") == "django.db.backends.postgresql" or cfg.get("ENGINE", '').lower() in ["postgresql", 'postgres', 'postgre'] or cfg.get("ENGINE") == ".postgresql":
                         engine = cfg.get("ENGINE")
                         rich_print(f"📄 Found settings at: {final_path}", color="#00CED1")
                         _settings_cache = {
-                            'username': cfg.get("USER"),
-                            'password': cfg.get("PASSWORD"),
-                            'database': cfg.get("NAME"),
-                            'host': cfg.get("HOST"),
-                            'port': cfg.get("PORT")
+                            'username': cfg.get("USER") or cfg.get("USERNAME") or cfg.get("user") or cfg.get("username"),
+                            'password': cfg.get("PASSWORD") or cfg.get("PASS") or cfg.get("password") or cfg.get("pass"),
+                            'database': cfg.get("NAME") or cfg.get("DB") or cfg.get("DB_NAME") or cfg.get("DBNAME") or cfg.get("name") or cfg.get("db") or cfg.get("db_name") or cfg.get("dbname"),
+                            'host': cfg.get("HOST") or cfg.get("HOSTNAME") or cfg.get("SERVER") or cfg.get("host") or cfg.get("hostname") or cfg.get("server"),
+                            'port': cfg.get("PORT") or cfg.get("port")
                         }
                         # print(f"_settings_cache: {_settings_cache}")
+                        logger.notice(f"[{final_path}] _settings_cache: {_settings_cache}")
                         return _settings_cache
             if engine != "django.db.backends.postgresql":
                 from rich.console import Console
@@ -143,23 +148,117 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
         
         # Parse .env, .json, .yaml
         else:
+            logger.debug(f"processing '{final_path}' ...")
             from envdot import load_env
             cfg = load_env(final_path)
             
             for key in ['engine', 'ENGINE', 'TYPE', 'type']:
-                if cfg.get(key) in ["django.db.backends.postgresql", "postgresql", "psql"]:
+                if cfg.get(key, '').lower() in ["django.db.backends.postgresql", "postgresql", "psql", "postgres", "postgre"] or cfg.get("POSTGRESQL_PORT") or cfg.get("postgresql_port") or cfg.get("POSTGRES_PORT") or cfg.get("postgres_port") or cfg.get("POSTGRE_PORT") or cfg.get("postgre_port"):
                     rich_print(f"📄 Found config at: {final_path}", color="#00CED1")
+                    engine = cfg.get("ENGINE")
+                    rich_print(f"📄 Found settings at: {final_path}", color="#00CED1")
                     _settings_cache = {
-                        'username': (cfg.get("USER") or cfg.get("user") or 
-                                   cfg.get("username") or cfg.get("USERNAME")),
-                        'password': (cfg.get("PASSWORD") or cfg.get("password") or 
-                                   cfg.get("pass") or cfg.get("PASS")),
-                        'database': (cfg.get("NAME") or cfg.get("name") or cfg.get("db") or 
-                                   cfg.get("DB") or cfg.get("dbname") or cfg.get("DBNAME") or 
-                                   cfg.get("db_name") or cfg.get("DB_NAME")),
-                        'host': cfg.get("HOST") or cfg.get("host") or cfg.get("hostname"),
-                        'port': cfg.get("PORT") or cfg.get("port")
+                        'username': cfg.get("POSTGRESQL_USERNAME") or \
+                                    cfg.get("POSTGRESQL_USER") or \
+                                    cfg.get("POSTGRES_USERNAME") or \
+                                    cfg.get("POSTGRES_USER") or \
+                                    cfg.get("POSTGRE_USERNAME") or \
+                                    cfg.get("POSTGRE_USER") or \
+                                    
+                                    cfg.get("postgresql_username") or \
+                                    cfg.get("postgresql_user") or \
+                                    cfg.get("postgres_username") or \
+                                    cfg.get("postgres_user") or \
+                                    cfg.get("postgre_username") or \
+                                    cfg.get("postgre_user") or \
+                                    
+                                    cfg.get("USER") or \
+                                    cfg.get("USERNAME") or \
+                                    cfg.get("user") or \
+                                    cfg.get("username"),
+                        'password': cfg.get("POSTGRESQL_PASSWORD") or \
+                                    cfg.get("POSTGRESQL_PASS") or \
+                                    cfg.get("POSTGRES_PASSWORD") or \
+                                    cfg.get("POSTGRES_PASS") or \
+                                    cfg.get("POSTGRE_PASSWORD") or \
+                                    cfg.get("POSTGRE_PASS") or \
+                                    
+                                    cfg.get("postgresql_password") or \
+                                    cfg.get("postgresql_pass") or \
+                                    cfg.get("postgres_password") or \
+                                    cfg.get("postgres_pass") or \
+                                    cfg.get("postgre_password") or \
+                                    cfg.get("postgre_pass") or \
+                                    
+                                    cfg.get("PASSWORD") or \
+                                    cfg.get("PASS") or \
+                                    cfg.get("password") or \
+                                    cfg.get("pass"),
+                        'database': cfg.get("POSTGRESQL_DB_NAME") or \
+                                    cfg.get("POSTGRESQL_DBNAME") or \
+                                    cfg.get("POSTGRESQL_DB") or \
+                                    cfg.get("POSTGRESQL_NAME") or \
+                                    cfg.get("POSTGRES_DB_NAME") or \
+                                    cfg.get("POSTGRES_DBNAME") or \
+                                    cfg.get("POSTGRES_DB") or \
+                                    cfg.get("POSTGRES_NAME") or \
+                                    cfg.get("POSTGRE_DB_NAME") or \
+                                    cfg.get("POSTGRE_DBNAME") or \
+                                    cfg.get("POSTGRE_DB") or \
+                                    cfg.get("POSTGRE_NAME") or \
+
+                                    cfg.get("postgresql_db_name") or \
+                                    cfg.get("postgresql_dbname") or \
+                                    cfg.get("postgresql_db") or \
+                                    cfg.get("postgresql_name") or \
+                                    cfg.get("postgres_db_name") or \
+                                    cfg.get("postgres_dbname") or \
+                                    cfg.get("postgres_db") or \
+                                    cfg.get("postgres_name") or \
+                                    cfg.get("postgre_db_name") or \
+                                    cfg.get("postgre_dbname") or \
+                                    cfg.get("postgre_db") or \
+                                    cfg.get("postgre_name") or \
+
+                                    cfg.get("NAME") or \
+                                    cfg.get("DB") or \
+                                    cfg.get("DB_NAME") or \
+                                    cfg.get("DBNAME") or \
+                                    cfg.get("name") or \
+                                    cfg.get("db") or \
+                                    cfg.get("db_name") or \
+                                    cfg.get("dbname"),
+                        'host': cfg.get("POSTGRESQL_HOSTNAME") or \
+                                cfg.get("POSTGRESQL_HOST") or \
+                                cfg.get("POSTGRES_HOSTNAME") or \
+                                cfg.get("POSTGRES_HOST") or \
+                                cfg.get("POSTGRE_HOSTNAME") or \
+                                cfg.get("POSTGRE_HOST") or \
+
+                                cfg.get("postgresql_hostname") or \
+                                cfg.get("postgresql_host") or \
+                                cfg.get("postgres_hostname") or \
+                                cfg.get("postgres_host") or \
+                                cfg.get("postgre_hostname") or \
+                                cfg.get("postgre_host") or \
+                                
+                                cfg.get("SERVER") or \
+                                cfg.get("host") or \
+                                cfg.get("hostname") or \
+                                cfg.get("server"),
+                        'port': cfg.get("POSTGRESQL_PORT") or \
+                                cfg.get("POSTGRES_PORT") or \
+                                cfg.get("POSTGRE_PORT") or \
+                                
+                                cfg.get("postgresql_port") or \
+                                cfg.get("postgres_port") or \
+                                cfg.get("postgre_port") or \
+
+                                cfg.get("PORT") or \
+                                cfg.get("port")
                     }
+                    # print(f"_settings_cache: {_settings_cache}")
+                    logger.notice(f"[{final_path}] _settings_cache: {_settings_cache}")
                     return _settings_cache
     
     except Exception as e:
@@ -791,8 +890,12 @@ async def create_user_db(args):
     rich_print(f"👻 HOSTNAME: {HOST}", color="#FFFFFF")
     rich_print(f"🚢 PORT: {PORT}", color="#FFFFFF")
     
-    # Create user
-    try:
+    async def start():
+        logger.info(f"args.user: {args.user}")
+        logger.info(f"args.password: {args.password}")
+        logger.info(f"HOST: {HOST}")
+        logger.info(f"PORT: {PORT}")
+
         conn = await asyncpg.connect(database="postgres", user=args.user, host=HOST, port=PORT, password=args.passwd)
         
         try:
@@ -806,12 +909,28 @@ async def create_user_db(args):
         
         await conn.close()
         rich_print("🔒 Logged out from postgres superuser", color="#00CED1")
+
+    # Create user
+    try:
+        await start()
+    except asyncpg.InvalidPasswordError:
+        rich_print("❌ Invalid PostgreSQL password", color="#FF4500", bold=True)
+        pwinput(f"[{os.getpid()}]Password for {args.user}: ")
+        return
     
     except Exception as e:
         if str(os.getenv('TRACEBACK', '0')).lower() in ['1', 'yes', 'true']:
             print_exception()
         else:
             rich_print(f"❌ Error (superuser connection): {e}", color="#FF4500", bold=True)
+            while 1:
+                args.password = pwinput(f"[{os.getpid()}]Password for {args.user} [q/x/quit/exit for exit]: ")
+                if args.password:
+                    if args.password in ['x', 'q', 'exit', 'quit']:
+                        rich_print(f"❌ exit/quit without password user '{args.user}' nedded !", color="#FF4500", bold=True)
+                        return
+                    else:
+                        break
         return
     
     # Create database
@@ -994,6 +1113,7 @@ def setup_argument_parser():
     
     show_tables_parser = show_subparsers.add_parser('tables', help='List tables in database', formatter_class=CustomRichHelpFormatter)
     show_tables_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
+    show_tables_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     show_subparsers.add_parser('users', help='List all users/roles', formatter_class=CustomRichHelpFormatter)
     show_subparsers.add_parser('connections', help='Show active connections', formatter_class=CustomRichHelpFormatter)
@@ -1001,10 +1121,12 @@ def setup_argument_parser():
     show_indexes_parser = show_subparsers.add_parser('indexes', help='Show indexes', formatter_class=CustomRichHelpFormatter)
     show_indexes_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     show_indexes_parser.add_argument("-t", "--table", help="Table name (optional)")
+    show_indexes_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     show_size_parser = show_subparsers.add_parser('size', help='Show sizes', formatter_class=CustomRichHelpFormatter)
     show_size_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     show_size_parser.add_argument("-t", "--table", help="Table name (optional)")
+    show_size_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     # CREATE command
     create_parser = subparsers.add_parser('create', help='Create user and database', formatter_class=CustomRichHelpFormatter)
@@ -1012,11 +1134,13 @@ def setup_argument_parser():
     create_parser.add_argument("-u", "--username", help="New PostgreSQL username")
     create_parser.add_argument("-p", "--password", help="Password for new user")
     create_parser.add_argument("-d", "--database", help="Database name to create")
+    create_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     # DESCRIBE command
     desc_parser = subparsers.add_parser('describe', help='Show table structure', formatter_class=CustomRichHelpFormatter)
     desc_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     desc_parser.add_argument("-t", "--table", required=True, help="Table name")
+    desc_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     # QUERY command
     query_parser = subparsers.add_parser('query', help='Execute SQL query', formatter_class=CustomRichHelpFormatter)
@@ -1024,10 +1148,12 @@ def setup_argument_parser():
     query_parser.add_argument("-q", "--query", required=True, help="SQL query to execute")
     query_parser.add_argument("--readonly", action="store_true", help="Prevent destructive operations")
     query_parser.add_argument("--limit", type=int, help="Limit rows displayed (default: 100)")
+    query_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     # BACKUP command
     backup_parser = subparsers.add_parser('backup', help='Backup database', formatter_class=CustomRichHelpFormatter)
     backup_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
+    backup_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     # DROP command
     drop_parser = subparsers.add_parser('drop', help='Drop database or user', formatter_class=CustomRichHelpFormatter)
@@ -1035,9 +1161,11 @@ def setup_argument_parser():
     
     drop_db_parser = drop_subparsers.add_parser('database', help='Drop a database', formatter_class=CustomRichHelpFormatter)
     drop_db_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
+    drop_db_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     drop_user_parser = drop_subparsers.add_parser('user', help='Drop a user/role', formatter_class=CustomRichHelpFormatter)
     drop_user_parser.add_argument("-u", "--username", required=True, help="Username to drop")
+    drop_user_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     return parser
 

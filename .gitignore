@@ -17,3 +17,8 @@ __pycache__/
 *.log
 *.ini
 psqlc/
+# PT backup directory
+.pt/
+
+# Added entries (1 items)
+_build/

@@ -1,15 +1,17 @@
 # PostgreSQL Manager CLI Tool
 
-A production-ready, feature-rich command-line interface tool for managing PostgreSQL databases with beautiful output formatting and intelligent auto-detection capabilities.
+Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats.
+
 
 ## ✨ Features
 
+- 🚀 **Async Operations**: Built on asyncpg for high-performance database operations
 - 🎯 **Intuitive Sub-commands** - Natural command structure (e.g., `show dbs`, `show tables`)
 - 🔍 **Auto-detection** - Automatically finds and parses Django `settings.py` files
 - 🎨 **Beautiful Output** - Rich formatted tables with color-coded messages
 - 🔐 **Security First** - Confirmation prompts for destructive operations, read-only mode for queries
 - 📊 **Comprehensive Info** - Database sizes, table structures, indexes, connections, and more
-- 🚀 **Production Ready** - Robust error handling, connection timeouts, transaction management
+- 🛡️ **Production Ready** - Robust error handling, connection timeouts, transaction management, Error handling, logging, and safety features
 
 ## 📋 Requirements
 
@@ -24,6 +26,18 @@ pip install git+https://github.com/cumulus13/psqlc
 ### Basic Usage
 
 ```bash
+# Show version
+psqlc --version
+
+# List all databases
+psqlc show dbs
+
+# List tables in current project's database (auto-detected)
+psqlc show tables
+
+# Show database users
+psqlc show users
+
 # Show all databases
 psqlc show dbs -U postgres -P password
 
@@ -37,9 +51,33 @@ psqlc create newuser newpass newdb -U postgres
 psqlc query -d mydb -q "SELECT * FROM users LIMIT 10" -U postgres
 ```
 
-### Using Django Settings Auto-detection
+## 🔧 Configuration Auto-Detection
 
-If you have a Django `settings.py` file in your project, the tool will automatically detect and use the database configuration:
+### 1. Django settings.py
+
+#### Using Django Settings Auto-detection
+
+If you have a Django `settings.py` file in your project to extract PostgreSQL configuration. It searches:
+
+1. Current working directory
+2. Recursively down to 5 levels deep
+3. Explicit paths provided as arguments
+
+the tool will automatically detect and use the database configurations from:
+
+```python
+# settings.py
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'mydatabase',
+        'USER': 'myuser',
+        'PASSWORD': 'mypassword',
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
+}
+```
 
 ```bash
 # No need to specify database credentials!
@@ -48,7 +86,56 @@ psqlc show dbs
 psqlc describe -t users
 ```
 
-The tool searches recursively (up to 5 levels deep) for `settings.py` files and extracts PostgreSQL configuration automatically.
+### 2. Environment Files (.env)
+```bash
+# .env
+POSTGRESQL_USERNAME=myuser
+POSTGRESQL_PASSWORD=mypassword
+POSTGRESQL_DB_NAME=mydatabase
+POSTGRESQL_HOST=localhost
+POSTGRESQL_PORT=5432
+```
+
+### 3. JSON/YAML Configuration
+```json
+{
+    "engine": "postgresql",
+    "user": "myuser",
+    "password": "mypassword",
+    "database": "mydatabase",
+    "host": "localhost",
+    "port": 5432
+}
+```
+
+
+The tool searches recursively (up to 5 levels deep) for `settings.py|.env|.json|.yaml|.ini` files and extracts PostgreSQL configuration automatically.
+
+
+### Auto-detection Priority
+
+1. **Command-line arguments** (highest priority)
+2. **Django settings.py -> .env -> .json -> .yaml -> .ini** (if no CLI args provided)
+3. **Interactive prompt** (for passwords only)
+
+### Manual Settings Path
+
+```bash
+# Specify settings.py file
+psqlc create /path/to/settings.py
+psqlc create /path/to/*.env
+psqlc create /path/to/anyfile.env
+psqlc create /path/to/*.json
+psqlc create /path/to/anyfile.json
+psqlc create /path/to/*.yaml
+psqlc create /path/to/anyfile.yaml
+psqlc create /path/to/*.ini
+psqlc create /path/to/anyfile.ini
+
+# Specify directory containing settings.py
+psqlc create /path/to/project/
+```
+
 
 ## 📚 Commands Reference
 
@@ -68,40 +155,48 @@ These options can be used with any command:
 
 Display various database information with beautiful formatted tables.
 
-#### `show dbs`
-
-List all databases with size and encoding information.
-
+#### List Databases `show dbs`
 ```bash
 psqlc show dbs
 ```
+Shows all databases with sizes, encoding, and collation.
 
-**Output:**
+**Example Output:**
 ```
-┌─────────────┬─────────┬──────────┬──────────────┐
-│ Database    │ Size    │ Encoding │ Collation    │
-├─────────────┼─────────┼──────────┼──────────────┤
-│ myapp_db    │ 125 MB  │ UTF8     │ en_US.UTF-8  │
-│ testdb      │ 45 MB   │ UTF8     │ en_US.UTF-8  │
-└─────────────┴─────────┴──────────┴──────────────┘
+┌───────────────────┬─────────┬───────────┬────────────┐
+│ Database          │ Size    │ Encoding  │ Collation  │
+├───────────────────┼─────────┼───────────┼────────────┤
+│ myapp_production  │ 15 MB   │ UTF8      │ en_US.utf8 │
+│ myapp_development │ 8 MB    │ UTF8      │ en_US.utf8 │
+│ postgres          │ 8 MB    │ UTF8      │ en_US.utf8 │
+└───────────────────┴─────────┴───────────┴────────────┘
 ```
 
-#### `show tables`
+#### List Tables `show tables`
 
 List all tables in a database with size and column count.
 
 ```bash
-# Auto-detect database from settings.py
+psqlc show tables -d mydatabase
+# Or auto-detect database from settings
 psqlc show tables
+```
 
-# Specify database explicitly
-psqlc show tables -d mydb
+**Example Output:**
+```
+┌────────┬──────────────────┬────────┬─────────┐
+│ Schema │ Table            │ Size   │ Columns │
+├────────┼──────────────────┼────────┼─────────┤
+│ public │ auth_user        │ 256 KB │ 11      │
+│ public │ django_session   │ 128 KB │ 4       │
+│ public │ products_product │ 512 KB │ 8       │
+└────────┴──────────────────┴────────┴─────────┘
 ```
 
 **Options:**
 - `-d, --database` - Database name (auto-detects from settings.py if not provided)
 
-#### `show users`
+#### List Users `show users`
 
 List all PostgreSQL users/roles with their permissions.
 
@@ -119,7 +214,7 @@ psqlc show users
 └──────────────┴───────────┴───────────┴─────────────┴───────────┴──────────────┘
 ```
 
-#### `show connections`
+#### Show Connections `show connections`
 
 Display active database connections with client information.
 
@@ -127,7 +222,7 @@ Display active database connections with client information.
 psqlc show connections
 ```
 
-#### `show indexes`
+#### Show Indexes `show indexes`
 
 Display indexes in database or specific table.
 
@@ -143,7 +238,7 @@ psqlc show indexes -d mydb -t users
 - `-d, --database` - Database name (auto-detect if not provided)
 - `-t, --table` - Table name (optional, shows all if not provided)
 
-#### `show size`
+#### Show Sizes `show size`
 
 Display size information for databases or tables.
 
@@ -265,6 +360,17 @@ psqlc backup
 psqlc backup -d mydb
 ```
 
+```bash
+psqlc backup -d mydatabase
+```
+
+**Output:**
+```
+🗄️ Creating backup of 'mydatabase'...
+💡 Run this command manually:
+   pg_dump -h 127.0.0.1 -p 5432 -U postgres -d mydatabase -F p -f mydatabase_backup_20231014_143022.sql
+```
+
 **Options:**
 - `-d, --database` - Database name to backup (auto-detect if not provided)
 
@@ -274,7 +380,7 @@ psqlc backup -d mydb
 
 Safely drop databases or users with confirmation prompts.
 
-#### `drop database`
+#### Drop Database `drop database`
 
 Drop a database with safety confirmation.
 
@@ -294,7 +400,7 @@ psqlc drop database -d mydb
 - Automatically terminates all active connections before dropping
 - Cannot be undone - use with caution!
 
-#### `drop user`
+#### Drop User `drop user`
 
 Drop a PostgreSQL user/role with safety confirmation.
 
@@ -309,45 +415,64 @@ psqlc drop user -u username
 - Requires typing the exact username for confirmation
 - Cannot be undone - use with caution!
 
-## 🔧 Django Settings.py Auto-detection
+## Advanced Usage
 
-The tool automatically detects and parses Django `settings.py` files to extract PostgreSQL configuration. It searches:
-
-1. Current working directory
-2. Recursively down to 5 levels deep
-3. Explicit paths provided as arguments
-
-### Supported Settings Format
-
-```python
-# settings.py
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'mydb',
-        'USER': 'myuser',
-        'PASSWORD': 'mypassword',
-        'HOST': 'localhost',
-        'PORT': '5432',
-    }
-}
-```
-
-### Auto-detection Priority
-
-1. **Command-line arguments** (highest priority)
-2. **Django settings.py** (if no CLI args provided)
-3. **Interactive prompt** (for passwords only)
-
-### Manual Settings Path
+### Using with Custom Configuration Files
 
 ```bash
-# Specify settings.py file
-psqlc create /path/to/settings.py
+# Use specific settings file
+psqlc --debug show tables
 
-# Specify directory containing settings.py
-psqlc create /path/to/project/
+# Custom host and port
+psqlc -H db.example.com --port 5433 show dbs
+
+# Different superuser
+psqlc -U admin show users
 ```
+
+### Debug Mode
+
+Enable debug mode for detailed logging:
+
+```bash
+psqlc --debug show dbs
+```
+
+Or set environment variable:
+```bash
+export DEBUG=1
+psqlc show tables
+```
+
+## API Reference
+
+### Core Functions
+
+#### `parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]`
+Parse Django settings.py or config files for database configuration.
+
+**Parameters:**
+- `settings_path`: Optional path to settings file
+
+**Returns:** Database configuration dictionary or None
+
+#### `get_connection(host: str, port: int, user: str, password: str, database: str = "postgres", auto_settings: bool = True, settings_path = None)`
+Create async database connection.
+
+#### `show_databases(args)`
+List all databases with detailed information.
+
+#### `create_user_db(args)`
+Create PostgreSQL user and database with proper privileges.
+
+## Error Handling
+
+psqlc includes comprehensive error handling:
+
+- Connection failures are clearly reported
+- Invalid queries show descriptive errors
+- Destructive operations require confirmation
+- Debug mode provides detailed error information
 
 ## 💡 Examples
 
@@ -416,6 +541,55 @@ psqlc drop database -d old_test_db
 psqlc drop user -u old_test_user
 ```
 
+### Example 5: Complete Workflow Example
+
+```bash
+# 1. Check existing databases
+psqlc show dbs
+
+# 2. Create new user and database
+psqlc create -u myapp -p mypass123 -d myapp_db
+
+# 3. List tables in new database
+psqlc show tables -d myapp_db
+
+# 4. Execute setup queries
+psqlc query -d myapp_db -q "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100))"
+
+# 5. Check table structure
+psqlc describe -d myapp_db -t users
+
+# 6. Monitor database size
+psqlc show size -d myapp_db
+
+# 7. Generate backup command
+psqlc backup -d myapp_db
+```
+
+### Example 6: Integration with Django Projects
+
+When working in a Django project directory, psqlc automatically detects your `settings.py`:
+
+```bash
+cd /path/to/your/django/project
+psqlc show tables  # Auto-detects database from settings.py
+psqlc describe -t auth_user  # No need to specify database
+```
+
+### Example 7: Production Monitoring
+
+```bash
+# Monitor active connections
+psqlc show connections
+
+# Check database sizes regularly
+psqlc show size
+
+# Monitor user activity
+psqlc show users
+```
+
+
 ## 🔐 Security Best Practices
 
 1. **Never hardcode passwords** - Use environment variables or settings files
@@ -433,22 +607,47 @@ psqlc drop user -u old_test_user
 psqlc --debug show dbs
 ```
 
+### Enable full traceback:
+
+```bash
+export TRACEBACK=1
+psqlc show dbs
+```
+
 Debug mode shows:
 - Settings.py detection attempts
 - Connection details
 - Detailed error messages
+- full traceback
 
 ### Common Issues
+
+### "Connection Refused**
+
+```bash
+# Check if PostgreSQL is running
+psqlc -H localhost --port 5432 show dbs
+```
 
 #### "Connection failed"
 - Check hostname, port, username, and password
 - Verify PostgreSQL server is running
 - Check firewall settings
 
+```bash
+   # Provide password explicitly
+psqlc -U postgres -P yourpassword show dbs
+```
+
 #### "Settings.py not found"
 - Ensure settings.py exists in current directory or subdirectories
 - Try specifying the path explicitly
 - Use `--debug` to see search paths
+
+```bash
+# Specify settings file directly
+psqlc --debug show tables
+```
 
 #### "Permission denied"
 - Verify user has sufficient privileges
@@ -461,6 +660,11 @@ Debug mode shows:
 |----------|-------------|---------|
 | `DEBUG` | Enable debug output | `0` |
 | `TRACEBACK` | Show full tracebacks on errors | `0` |
+| `HOST` | Database host | empty/None |
+| `PORT` | Database port | `5432` |
+| `USER` | Database user | `postgres` |
+| `PASSWORD` | Database password | empty/None |
+| `DATABASE`/`DB_NAME`/`DB` | Database name | empty/None |
 
 Set environment variables:
 

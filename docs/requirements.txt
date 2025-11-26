@@ -1,0 +1,19 @@
+# Documentation build requirements for ReadTheDocs
+
+# Sphinx and extensions
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.2.0
+sphinx-copybutton>=0.5.0
+myst-parser>=1.0.0
+
+# Required packages for autodoc
+rich
+asyncpg
+licface
+envdot
+pwinput
+psqlc
+
+# Additional documentation tools
+sphinxcontrib-napoleon>=0.7
+sphinx-autodoc-typehints>=1.19.0

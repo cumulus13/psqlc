@@ -1,0 +1,245 @@
+/* Custom Dark Theme for psqlc Documentation */
+
+/* Override RTD theme colors for darker theme */
+.wy-nav-content {
+    background: #1e1e1e;
+    color: #e0e0e0;
+}
+
+.wy-side-nav-search {
+    background-color: #2c3e50;
+}
+
+.wy-menu-vertical a {
+    color: #b8b8b8;
+}
+
+.wy-menu-vertical a:hover {
+    background-color: #34495e;
+    color: #ffffff;
+}
+
+.wy-menu-vertical li.current {
+    background: #2c3e50;
+}
+
+.wy-menu-vertical li.current a {
+    color: #ffffff;
+    border-right: solid 3px #3498db;
+}
+
+.wy-side-nav-search > div.version {
+    color: #ffffff;
+}
+
+/* Code blocks */
+.rst-content .highlight {
+    background: #282c34;
+    border: 1px solid #3e4451;
+}
+
+.highlight {
+    background: #282c34;
+}
+
+.highlight pre {
+    background: #282c34;
+    color: #abb2bf;
+}
+
+/* Inline code */
+code.literal {
+    background: #282c34;
+    border: 1px solid #3e4451;
+    color: #61afef;
+    padding: 2px 5px;
+}
+
+/* Links */
+a {
+    color: #61afef;
+}
+
+a:hover {
+    color: #528bff;
+}
+
+/* Tables */
+.wy-table-bordered-all, .rst-content table.docutils {
+    border-color: #3e4451;
+}
+
+.wy-table-bordered-all td, .rst-content table.docutils td {
+    border-color: #3e4451;
+    background: #2d2d2d;
+}
+
+.wy-table thead {
+    background: #2c3e50;
+    color: #ffffff;
+}
+
+.wy-table-odd td, .wy-table-striped tr:nth-child(2n-1) td, .rst-content table.docutils:not(.field-list) tr:nth-child(2n-1) td {
+    background-color: #252525;
+}
+
+/* Admonitions */
+.rst-content .note {
+    background: #1a3a52;
+    border-color: #2980b9;
+}
+
+.rst-content .warning {
+    background: #4a3a1a;
+    border-color: #e67e22;
+}
+
+.rst-content .danger {
+    background: #4a1a1a;
+    border-color: #e74c3c;
+}
+
+.rst-content .tip {
+    background: #1a4a1a;
+    border-color: #27ae60;
+}
+
+/* Search box */
+.wy-side-nav-search input[type=text] {
+    background-color: #34495e;
+    border-color: #2c3e50;
+    color: #ffffff;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    color: #e0e0e0;
+}
+
+/* Section headers in sidebar */
+.wy-menu-vertical header, .wy-menu-vertical p.caption {
+    color: #ffffff;
+}
+
+/* Footer */
+.rst-footer-buttons {
+    background: #2d2d2d;
+}
+
+/* Breadcrumbs */
+.wy-breadcrumbs li {
+    color: #b8b8b8;
+}
+
+.wy-breadcrumbs li a {
+    color: #61afef;
+}
+
+/* Document */
+.document {
+    background: #1e1e1e;
+}
+
+/* Version selector */
+.rst-versions {
+    background: #2c3e50;
+    color: #ffffff;
+}
+
+.rst-versions a {
+    color: #61afef;
+}
+
+/* Syntax highlighting improvements */
+.highlight .hll { background-color: #3e4451 }
+.highlight .c { color: #5c6370; font-style: italic } /* Comment */
+.highlight .k { color: #c678dd } /* Keyword */
+.highlight .o { color: #abb2bf } /* Operator */
+.highlight .p { color: #abb2bf } /* Punctuation */
+.highlight .cm { color: #5c6370; font-style: italic } /* Comment.Multiline */
+.highlight .cp { color: #e5c07b } /* Comment.Preproc */
+.highlight .c1 { color: #5c6370; font-style: italic } /* Comment.Single */
+.highlight .cs { color: #5c6370; font-style: italic } /* Comment.Special */
+.highlight .ge { font-style: italic } /* Generic.Emph */
+.highlight .gs { font-weight: bold } /* Generic.Strong */
+.highlight .kc { color: #d19a66 } /* Keyword.Constant */
+.highlight .kd { color: #c678dd } /* Keyword.Declaration */
+.highlight .kn { color: #c678dd } /* Keyword.Namespace */
+.highlight .kp { color: #c678dd } /* Keyword.Pseudo */
+.highlight .kr { color: #c678dd } /* Keyword.Reserved */
+.highlight .kt { color: #e5c07b } /* Keyword.Type */
+.highlight .m { color: #d19a66 } /* Literal.Number */
+.highlight .s { color: #98c379 } /* Literal.String */
+.highlight .na { color: #61afef } /* Name.Attribute */
+.highlight .nb { color: #e5c07b } /* Name.Builtin */
+.highlight .nc { color: #e5c07b } /* Name.Class */
+.highlight .no { color: #e06c75 } /* Name.Constant */
+.highlight .nd { color: #61afef } /* Name.Decorator */
+.highlight .ni { color: #e06c75 } /* Name.Entity */
+.highlight .ne { color: #e06c75 } /* Name.Exception */
+.highlight .nf { color: #61afef } /* Name.Function */
+.highlight .nl { color: #e06c75 } /* Name.Label */
+.highlight .nn { color: #abb2bf } /* Name.Namespace */
+.highlight .nt { color: #e06c75 } /* Name.Tag */
+.highlight .nv { color: #e06c75 } /* Name.Variable */
+.highlight .ow { color: #c678dd } /* Operator.Word */
+.highlight .w { color: #abb2bf } /* Text.Whitespace */
+.highlight .mb { color: #d19a66 } /* Literal.Number.Bin */
+.highlight .mf { color: #d19a66 } /* Literal.Number.Float */
+.highlight .mh { color: #d19a66 } /* Literal.Number.Hex */
+.highlight .mi { color: #d19a66 } /* Literal.Number.Integer */
+.highlight .mo { color: #d19a66 } /* Literal.Number.Oct */
+.highlight .sb { color: #98c379 } /* Literal.String.Backtick */
+.highlight .sc { color: #98c379 } /* Literal.String.Char */
+.highlight .sd { color: #5c6370; font-style: italic } /* Literal.String.Doc */
+.highlight .s2 { color: #98c379 } /* Literal.String.Double */
+.highlight .se { color: #d19a66 } /* Literal.String.Escape */
+.highlight .sh { color: #98c379 } /* Literal.String.Heredoc */
+.highlight .si { color: #d19a66 } /* Literal.String.Interpol */
+.highlight .sx { color: #98c379 } /* Literal.String.Other */
+.highlight .sr { color: #98c379 } /* Literal.String.Regex */
+.highlight .s1 { color: #98c379 } /* Literal.String.Single */
+.highlight .ss { color: #98c379 } /* Literal.String.Symbol */
+
+/* Make logo/title stand out */
+.wy-side-nav-search .wy-dropdown > a, .wy-side-nav-search > a {
+    color: #ffffff;
+    font-size: 120%;
+    font-weight: bold;
+}
+
+/* Improve readability */
+.rst-content {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+/* Better spacing for lists */
+.rst-content ul li, .rst-content ol li {
+    margin-bottom: 8px;
+}
+
+/* Command line prompts */
+.highlight .gp {
+    color: #61afef;
+    font-weight: bold;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #3e4451;
+    border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4e5461;
+}
