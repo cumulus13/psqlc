@@ -299,6 +299,7 @@ setup(
     project_urls={
         'Bug Reports': 'https://github.com/cumulus13/psqlc/issues',
         'Source': 'https://github.com/cumulus13/psqlc',
+        "Documentation": f"https://psqlc.readthedocs.io",
     },
     ext_modules=extensions,
     cmdclass=cmdclass,
