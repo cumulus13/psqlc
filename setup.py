@@ -61,11 +61,32 @@ def get_version():
 
 # Create __init__.py
 with open(Path(NAME, '__init__.py'), 'w') as f:
-    f.write("""from .psqlc import rich_print, load_settings_from_path, find_settings_recursive, parse_django_settings, get_connection, show_databases, show_tables, show_users, describe_table, execute_query, create_user_db, backup_database, show_connections, show_indexes, show_size, drop_database, drop_user, main
+    f.write("""from .psqlc import rich_print, load_settings_from_path, find_settings_recursive, parse_django_settings, get_connection, show_databases, show_tables, show_users, describe_table, execute_query, create_user_db, backup_database, show_connections, show_indexes, show_size, drop_database, drop_user, main, print_exception, get_version, get_db_config_or_args
 
 from .__version__ import version as __version__
 __author__ = "Hadi Cahyadi"
 __email__ = "cumulus13@gmail.com"
+__all__ = ["rich_print",
+            "load_settings_from_path",
+            "find_settings_recursive",
+            "parse_django_settings",
+            "get_connection",
+            "show_databases",
+            "show_tables",
+            "show_users",
+            "describe_table",
+            "execute_query",
+            "create_user_db",
+            "backup_database",
+            "show_connections",
+            "show_indexes",
+            "show_size",
+            "drop_database",
+            "drop_user",
+            "main",
+            "print_exception",
+            "get_version",
+            "get_db_config_or_args"]
 """)
 
 # Custom build_py to exclude .py files when building with Cython
@@ -145,7 +166,7 @@ this_directory = Path(__file__).parent
 try:
     long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 except:
-    long_description = "A production-ready, feature-rich command-line interface tool for managing PostgreSQL databases with beautiful output formatting and intelligent auto-detection capabilities."
+    long_description = "Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats."
 
 _extensions = []
 extensions = None
@@ -267,7 +288,7 @@ setup(
     version=get_version(),
     author='cumulus13',
     author_email='cumulus13@gmail.com',
-    description='A production-ready, feature-rich command-line interface tool for managing PostgreSQL databases with beautiful output formatting and intelligent auto-detection capabilities.',
+    description='Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats.',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/cumulus13/psqlc',

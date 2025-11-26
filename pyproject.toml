@@ -1,48 +1,68 @@
 [build-system]
-requires = [ "setuptools>=70", "wheel", "cython>=3.0",]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "psqlc"
 version = "1.1.6"
-description = "A production-ready, feature-rich CLI tool for managing PostgreSQL databases with beautiful formatting and smart auto-detection"
+description = "Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats."
 readme = "README.md"
+readme-content-type = "text/markdown"
+
+authors = [
+    { name = "cumulus13", email = "cumulus13@gmail.com" }
+]
+
 requires-python = ">=3.6"
-keywords = [ "postgresql", "automation", "analytics", "developer tools", "monitoring", "devops", "django", "envdot", "env",]
-classifiers = [ "Development Status :: 5 - Production/Stable", "Intended Audience :: Developers", "Topic :: System :: Filesystems", "Topic :: Software Development :: Build Tools", "Environment :: Console", "Operating System :: OS Independent", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3 :: Only", "Programming Language :: Python :: 3.8", "Programming Language :: Python :: 3.9", "Programming Language :: Python :: 3.10", "Programming Language :: Python :: 3.11",]
-dependencies = [ "rich", "asyncpg", "licface", "envdot", "pwinput",]
-[[project.authors]]
-name = "Hadi Cahyadi"
-email = "cumulus13@gmail.com"
+license = { text = "MIT" }
 
-[project.license]
-file = "LICENSE"
+keywords = [
+    "postgresql",
+    "automation",
+    "analytics",
+    "developer tools",
+    "monitoring",
+    "devops"
+]
 
-[project.urls]
-Homepage = "https://github.com/cumulus13/psqlc"
-BugTracker = "https://github.com/cumulus13/psqlc/issues"
-Source = "https://github.com/cumulus13/psqlc"
-Documentation = "https://psqlc.readthedocs.io"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Filesystems",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Environment :: Console"
+]
+
+dependencies = [
+    "rich",
+    "asyncpg",
+    "licface",
+    "envdot",
+    "pwinput"
+]
 
 [project.scripts]
 psqlc = "psqlc.psqlc:main"
 
+[project.urls]
+Homepage = "https://github.com/cumulus13/psqlc"
+Source = "https://github.com/cumulus13/psqlc"
+Bug Reports = "https://github.com/cumulus13/psqlc/issues"
+Documentation = "https://psqlc.readthedocs.io"
+
 [tool.setuptools]
-zip-safe = false
 include-package-data = true
 
-[tool.setuptools.package-data]
-psqlc = [ "*.so", "*.pyd", "*.png",]
-
 [tool.setuptools.packages.find]
-include = [ "psqlc",]
+include = ["psqlc"]
 
-[tool.setuptools.ext-modules."psqlc.psqlc"]
-sources = [ "psqlc/psqlc.pyx",]
-extra-compile-args = [ "-O3",]
-
-[tool.setuptools.ext-modules."psqlc.psqlc".cython-directives]
-language_level = "3"
-boundscheck = false
-wraparound = false
-embedsignature = true
+[tool.setuptools.package-data]
+psqlc = ["*.png", "*.so", "*.pyd"]
