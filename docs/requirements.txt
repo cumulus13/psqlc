@@ -13,6 +13,7 @@ licface
 envdot
 pwinput
 version_get
+richcolorlog
 
 # Additional documentation tools
 sphinxcontrib-napoleon>=0.7
