@@ -8,8 +8,13 @@ import sys
 import os
 import asyncio
 from typing import Optional, Dict, Any
-from richcolorlog import setup_logging
-logger = setup_logging()
+try:
+    from richcolorlog import setup_logging
+    logger = setup_logging()
+except:
+    import logging
+    logger = logging.getLogger(__main__)
+    
 os.environ.update({'NO_LOGGING':'1'})
 
 HOST = "127.0.0.1"
@@ -845,7 +850,7 @@ async def create_user_db(args):
     """Create PostgreSQL user and database"""
     import asyncpg
     from pwinput import pwinput
-    
+
     username = password = database = None
     PORT = args.port or DEFAULT_PORT
     HOST = args.hostname

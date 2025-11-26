@@ -310,7 +310,7 @@ setup(
     ],
     keywords='postgresql, automation, analytics, developer tools, monitoring, devops, django, asyncpg, dotenv',
     python_requires='>=3.6',
-    install_requires=['rich', 'asyncpg', 'licface', 'envdot', 'pwinput'],
+    install_requires=['rich', 'asyncpg', 'licface', 'envdot', 'pwinput', 'richcolorlog'],
     entry_points={
         'console_scripts': [
             'psqlc=psqlc.psqlc:main',
