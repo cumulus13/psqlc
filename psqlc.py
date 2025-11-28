@@ -1,21 +1,80 @@
 #!/usr/bin/env python3
 # Author: Hadi Cahyadi <cumulus13@gmail.com>
 # Date: 2025-10-14
-# Description: Production-ready PostgreSQL management CLI tool with asyncpg
+# Description: PostgreSQL management CLI tool with asyncpg
 # License: MIT
 
 import sys
 import os
 import asyncio
 from typing import Optional, Dict, Any
-try:
-    from richcolorlog import setup_logging
-    logger = setup_logging()
-except:
-    import logging
-    logger = logging.getLogger()
 
-os.environ.update({'NO_LOGGING':'1'})
+if len(sys.argv) > 1 and any('--debug' == arg or '-d' == arg for arg in sys.argv):
+    print("🐞 Debug mode enabled")
+    os.environ["DEBUG"] = "1"
+    os.environ['LOGGING'] = "1"
+    os.environ.pop('NO_LOGGING', None)
+    os.environ['TRACEBACK'] = "1"
+    os.environ["LOGGING"] = "1"
+else:
+    os.environ['NO_LOGGING'] = "1"
+
+# try:
+#     from richcolorlog import setup_logging
+#     logger = setup_logging()
+# except:
+#     import logging
+#     logger = logging.getLogger()
+
+# os.environ.update({'NO_LOGGING':'1'})
+
+# ...existing code...
+def get_logger(name: str = None, level: int = None, prefer_rich: bool = True, force_plain: bool = False):
+    """Return a configured logger instance.
+    - prefer_rich: try richcolorlog.setup_logging if available
+    - force_plain: force stdlib logging (or use FORCE_PLAIN_LOG env)
+    - level: optional logging level (int). If None, uses DEBUG when DEBUG env is truthy.
+    """
+    import logging
+    import os
+
+    # resolve level
+    if level is None:
+        level = logging.DEBUG if str(os.getenv("DEBUG", "")).lower() in ("1", "true", "yes") else logging.INFO
+
+    # allow env override to force plain logging
+    if force_plain or str(os.getenv("FORCE_PLAIN_LOG", "")).lower() in ("1", "true", "yes"):
+        logging.basicConfig(level=level)
+        return logging.getLogger(name)
+
+    # try richcolorlog if requested
+    if prefer_rich:
+        try:
+            from richcolorlog import setup_logging as _setup
+            # setup_logging implementations vary; try to call flexibly
+            try:
+                logger_obj = _setup(name=name, level=level)
+            except TypeError:
+                try:
+                    logger_obj = _setup()
+                except Exception:
+                    import logging as _logging
+                    _logging.basicConfig(level=level)
+                    logger_obj = _logging.getLogger(name)
+            return logger_obj
+        except Exception:
+            # fallback to stdlib logging
+            import logging as _logging
+            _logging.basicConfig(level=level)
+            return _logging.getLogger(name)
+
+    # final fallback: stdlib logging
+    import logging as _logging
+    _logging.basicConfig(level=level)
+    return _logging.getLogger(name)
+
+# create module-level logger (can be re-created later by calling get_logger)
+logger = get_logger(__name__)
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 5432
@@ -52,8 +111,7 @@ def load_settings_from_path(path: str):
     spec.loader.exec_module(settings)
     return settings
 
-
-def find_settings_recursive(start_path: str = None, max_depth: int = 5, filename: str = 'settings.py') -> Optional[str]:
+def find_settings_recursive1(start_path: str = None, max_depth: int = 5, filename: str = 'settings.py') -> Optional[str]:
     """Recursively search for settings file"""
     if start_path is None:
         start_path = os.getcwd()
@@ -84,6 +142,64 @@ def find_settings_recursive(start_path: str = None, max_depth: int = 5, filename
     
     return search_directory(start_path)
 
+def find_any_config(start_path: str = None) -> Optional[str]:
+    for ext in [".env", ".json", ".yaml"]:
+        path = find_settings_recursive(start_path, filename=ext)
+        if path:
+            return path
+    return None
+
+def find_settings_recursive(
+    start_path: str = None,
+    max_depth_up: int = 10,
+    max_depth_down: int = 5,
+    filename: str = 'settings.py'
+) -> Optional[str]:
+    """Search for a file by:
+    1. Scanning downward from current dir (including all subdirs)
+    2. If not found, go upward (parent, grandparent, ...) up to root,
+       and for *each* ancestor, scan its entire subtree downward.
+    """
+    import os
+    from pathlib import Path
+
+    if start_path is None:
+        start_path = os.getcwd()
+    start_path = Path(start_path).resolve()
+
+    # Helper: recursive downward search from a root dir
+    def search_down(root: Path, current_depth: int = 0) -> Optional[Path]:
+        if current_depth > max_depth_down:
+            return None
+        candidate = root / filename
+        if candidate.is_file():
+            return candidate
+        try:
+            for item in root.iterdir():
+                if item.is_dir() and item.name not in {'node_modules', 'venv', '__pycache__'} and '-env' not in item.name:
+                    result = search_down(item, current_depth + 1)
+                    if result:
+                        return result
+        except (PermissionError, OSError):
+            pass
+        return None
+
+    # Step 1: Search downward from current directory
+    result = search_down(start_path)
+    if result:
+        return str(result)
+
+    # Step 2: Walk upward and search downward from each ancestor
+    current = start_path.parent
+    depth = 0
+    while current != current.parent and depth <= max_depth_up:
+        result = search_down(current)
+        if result:
+            return str(result)
+        current = current.parent
+        depth += 1
+
+    return None
 
 def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]:
     """Parse Django settings.py or config files for database configuration"""
@@ -105,11 +221,12 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
         if settings_path: logger.info(f"os.path.isfile(settings_path): {os.path.isfile(settings_path)}")
 
         if not settings_path or not os.path.isfile(settings_path):
-            for cf in [".env", ".json", ".yaml"]:
-                settings_path = find_settings_recursive(filename=cf)
-                logger.notice(f"settings_path: {settings_path}")
-                if settings_path:
-                    break
+            # for cf in [".env", ".json", ".yaml"]:
+            #     settings_path = find_settings_recursive(filename=cf)
+            #     logger.notice(f"settings_path: {settings_path}")
+            #     if settings_path:
+            #         break
+            settings_path = find_any_config()
         
         if not settings_path or not os.path.isfile(settings_path):
             return None
@@ -850,6 +967,8 @@ async def create_user_db(args):
     """Create PostgreSQL user and database"""
     import asyncpg
     from pwinput import pwinput
+    
+    db_config = parse_django_settings()
 
     username = password = database = None
     PORT = args.port or DEFAULT_PORT
@@ -859,7 +978,6 @@ async def create_user_db(args):
     if args.CONFIG and len(args.CONFIG) == 3:
         username, password, database = args.CONFIG
     elif not args.username and not args.password and not args.database:
-        db_config = parse_django_settings()
         if db_config:
             username = db_config.get('username')
             password = db_config.get('password')
@@ -881,10 +999,16 @@ async def create_user_db(args):
             HOST = db_config.get('host') or HOST
             PORT = db_config.get('port') or PORT
     
-    if not username or not password or not database:
-        username = username or args.username
-        password = password or args.password
-        database = database or args.database
+    # if not username or not password or not database:
+    username = username or args.username or db_config.get('username') if db_config else None
+    password = password or args.password or db_config.get('password') if db_config else None
+    database = database or args.database or db_config.get('database') if db_config else None
+    
+    args.password = password if not args.password else args.password
+    args.user = username if not args.user else args.user
+    args.database = database if not args.database else args.database
+
+    logger.debug(f"username: {username}, password: {'*****' if password else ''}, database: {database}, HOST: {HOST}, PORT: {PORT}")
     
     if not all([username, password, database]):
         rich_print("❌ Missing required info (username, password, database)", color="#FF4500", bold=True)
@@ -992,15 +1116,21 @@ async def drop_database(args):
             rich_print("❌ Database name required. Use -d/--database", color="#FF4500", bold=True)
             return
     
-    rich_print(f"⚠️  WARNING: You are about to DROP database '{args.database}'", color="#FF4500", bold=True)
-    rich_print(f"❓ Type the database name to confirm: ", color="#FFFF00", bold=True, end="")
+    rich_print(f"⚠️ WARNING: You are about to DROP database '{args.database}'", color="#FFE713", bold=True)
+    rich_print(f"❓ Type the database name to confirm: ", color="#19CDFF", bold=True, end="")
     confirmation = input().strip()
     
     if confirmation != args.database:
-        rich_print("❌ Database name mismatch. Aborted.", color="#FF4500", bold=True)
+        rich_print("❌ Database name mismatch. Aborted.", color="#FF0008", bold=True)
         return
     
     try:
+        logger.notice(f"database : postgres")
+        logger.notice(f"user     : {args.user}")
+        logger.notice(f"password : {args.passwd}")
+        logger.notice(f"host     : {args.hostname}")
+        logger.notice(f"port     : {args.port}")
+
         conn = await asyncpg.connect(
             database="postgres",
             user=args.user,
@@ -1021,7 +1151,10 @@ async def drop_database(args):
         await conn.close()
     
     except Exception as e:
-        rich_print(f"❌ Error dropping database: {e}", color="#FF4500", bold=True)
+        rich_print(f"❌ Error dropping database [0]: {e}", color="#FF4500", bold=True)
+
+        if str(os.getenv('TRACEBACK', '0')).lower() in ['1', 'yes', 'true']:
+            print_exception()
 
 
 async def drop_user(args):
@@ -1055,7 +1188,7 @@ async def drop_user(args):
         await conn.close()
     
     except Exception as e:
-        rich_print(f"❌ Error dropping user: {e}", color="#FF4500", bold=True)
+        rich_print(f"❌ Error dropping user [1]: {e}", color="#FF4500", bold=True)
 
 
 # ============================================================================
@@ -1175,48 +1308,155 @@ def setup_argument_parser():
     
     return parser
 
+def command_requires_superuser(args) -> bool:
+    """Return True for commands that typically require superuser privileges."""
+    if not args or not getattr(args, "command", None):
+        return False
+    # create (create user/db) and drop (drop db/user) usually require superuser
+    if args.command == "create":
+        return True
+    if args.command == "drop":
+        return True
+    # other commands normally don't require superuser by default
+    return False
+
+def ensure_superuser_password(args, db_config):
+    """Ensure args.passwd is set when a superuser password is needed.
+    Do not prompt for non-superuser commands.
+    """
+    from pwinput import pwinput
+
+    if command_requires_superuser(args):
+        # prefer db_config, then env, then interactive prompt
+        if not getattr(args, "passwd", None):
+            if db_config and db_config.get("password"):
+                args.passwd = db_config.get("password")
+                logger.warning("🔐 Using password from settings", color="#00CED1")
+            else:
+                env_pw = os.getenv("PASSWORD")
+                if env_pw:
+                    args.passwd = env_pw
+                    logger.warning("🔐 Using password from $PASSWORD", color="#00CED1")
+                else:
+                    # interactive prompt because superuser password is required
+                    args.passwd = pwinput(f"[{os.getpid()}]Password for {args.user}: ")
+
+
+# async def run_command(args, show_parser, drop_parser):
+#     """Route to appropriate command handler"""
+#     if args.command == 'create':
+#         await create_user_db(args)
+#     elif args.command == 'show':
+#         if args.show_command == 'dbs':
+#             await show_databases(args)
+#         elif args.show_command == 'tables':
+#             await show_tables(args)
+#         elif args.show_command == 'users':
+#             await show_users(args)
+#         elif args.show_command == 'connections':
+#             await show_connections(args)
+#         elif args.show_command == 'indexes':
+#             await show_indexes(args)
+#         elif args.show_command == 'size':
+#             await show_size(args)
+#         else:
+#             show_parser.print_help()
+#     elif args.command == 'describe':
+#         await describe_table(args)
+#     elif args.command == 'query':
+#         await execute_query(args)
+#     elif args.command == 'backup':
+#         backup_database(args)
+#     elif args.command == 'drop':
+#         if args.drop_command == 'database':
+#             await drop_database(args)
+#         elif args.drop_command == 'user':
+#             await drop_user(args)
+#         else:
+#             drop_parser.print_help()
 
 async def run_command(args, show_parser, drop_parser):
-    """Route to appropriate command handler"""
-    if args.command == 'create':
-        await create_user_db(args)
-    elif args.command == 'show':
-        if args.show_command == 'dbs':
-            await show_databases(args)
-        elif args.show_command == 'tables':
-            await show_tables(args)
-        elif args.show_command == 'users':
-            await show_users(args)
-        elif args.show_command == 'connections':
-            await show_connections(args)
-        elif args.show_command == 'indexes':
-            await show_indexes(args)
-        elif args.show_command == 'size':
-            await show_size(args)
-        else:
-            show_parser.print_help()
-    elif args.command == 'describe':
-        await describe_table(args)
-    elif args.command == 'query':
-        await execute_query(args)
-    elif args.command == 'backup':
-        backup_database(args)
-    elif args.command == 'drop':
-        if args.drop_command == 'database':
-            await drop_database(args)
-        elif args.drop_command == 'user':
-            await drop_user(args)
-        else:
-            drop_parser.print_help()
+    """Route to appropriate command handler with retry-on-permission failure."""
+    from pwinput import pwinput
 
+    async def _dispatch():
+        if args.command == 'create':
+            await create_user_db(args)
+        elif args.command == 'show':
+            if args.show_command == 'dbs':
+                await show_databases(args)
+            elif args.show_command == 'tables':
+                await show_tables(args)
+            elif args.show_command == 'users':
+                await show_users(args)
+            elif args.show_command == 'connections':
+                await show_connections(args)
+            elif args.show_command == 'indexes':
+                await show_indexes(args)
+            elif args.show_command == 'size':
+                await show_size(args)
+            else:
+                show_parser.print_help()
+        elif args.command == 'describe':
+            await describe_table(args)
+        elif args.command == 'query':
+            await execute_query(args)
+        elif args.command == 'backup':
+            backup_database(args)
+        elif args.command == 'drop':
+            if args.drop_command == 'database':
+                await drop_database(args)
+            elif args.drop_command == 'user':
+                await drop_user(args)
+            else:
+                drop_parser.print_help()
+
+    tried_elevation = False
+    while True:
+        try:
+            await _dispatch()
+            break
+        except Exception as e:
+            msg = str(e).lower()
+            # detect permission-like failures (best-effort)
+            permission_indicators = [
+                "permission denied",
+                "insufficient privilege",
+                "must be superuser",
+                "role .* does not have permission",
+                "not authorized",
+                "insufficient privilege",
+                "permissionerror"
+            ]
+            if not tried_elevation and any(k in msg for k in permission_indicators):
+                tried_elevation = True
+                logger.warning("📌 Operation failed due to permission. Attempting to elevate and retry...", color="#FFFF00")
+                # if env password present, use it; else prompt interactively
+                if os.getenv("PASSWORD"):
+                    args.passwd = os.getenv("PASSWORD")
+                    logger.warning("🔐 Using password from $PASSWORD", color="#00CED1")
+                elif not getattr(args, "passwd", None):
+                    # interactive prompt to get superuser password, then retry once
+                    args.passwd = pwinput(f"[{os.getpid()}]Superuser password for {args.user}: ")
+                    if not args.passwd:
+                        rich_print("❌ No password provided. Aborting retry.", color="#FF4500", bold=True)
+                        raise
+                logger.warning("🔁 Retrying operation with provided superuser password...", color="#00CED1")
+                continue
+            # if not permission-related or already retried, re-raise for normal error handling
+            raise
 
 def main():
     """Main entry point"""
     # import getpass
-    from pwinput import pwinput
+    # from pwinput import pwinput
     from rich.console import Console
+    console = Console()
     import argparse
 
+    db_config = parse_django_settings()
+    logger.info(f"db_config = {db_config}")
+        
     # Early version check
     if '--version' in sys.argv or '-v' in sys.argv:
         Console().print(f"📦 [bold #FFFF00]Version:[/] [bold #00FFFF]{get_version()}[/]")
@@ -1229,24 +1469,31 @@ def main():
         sys.exit(1)
     
     args = parser.parse_args()
+
+    args.database = db_config.get('database') or args.database
+    args.hostname = db_config.get('host') or args.hostname
+    args.port = int(db_config.get('port')) if db_config.get('port') else args.port
     
     # Set debug mode
     if hasattr(args, 'debug') and args.debug:
-        os.environ["DEBUG"] = "1"
-        os.environ['LOGGING'] = "1"
-        os.environ.pop('NO_LOGGING')
+        # logger = setup_logging()
+        # os.environ["DEBUG"] = "1"
+        # os.environ['LOGGING'] = "1"
+        # if os.getenv('NO_LOGGING'):
+        #     os.environ.pop('NO_LOGGING')
+        # os.environ['TRACEBACK'] = "1"
+        # os.environ["LOGGING"] = "1"
+        logger.warning("🐞 Debug mode enabled")
     
     # Get password from settings or prompt
-    if not args.passwd and args.command:
-        db_config = parse_django_settings()
-        logger.info(f"db_config = {db_config}")
-        if db_config and db_config.get('password'):
-            args.passwd = db_config.get('password')
-            #if os.getenv("DEBUG", "0") == "1":
-                #rich_print("🔐 Using password from settings", color="#00CED1")
-            logger.warning("🔐 Using password from settings", color="#00CED1")
-        else:
-            args.passwd = os.getenv('PASSWORD') or pwinput(f"[{os.getpid()}]Password for {args.user}: ")
+    logger.warning(f"args.command: {args.command}")
+    ensure_superuser_password(args, db_config)
+    # if not args.passwd and args.command:
+    #     if db_config and db_config.get('password'):
+    #         args.passwd = db_config.get('password')
+    #         logger.warning("🔐 Using password from settings", color="#00CED1")
+    #     else:
+    #         args.passwd = os.getenv('PASSWORD') or pwinput(f"[{os.getpid()}]Password for {args.user}: ")
     
     # Get references to parsers for help display
     show_parser = None
