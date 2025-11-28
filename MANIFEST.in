@@ -25,6 +25,3 @@ global-exclude *.c
 # For sdist, we want binaries; for bdist_wheel, exclude source
 prune psqlc/psqlc.py
 prune psqlc/psqlc.pyx
-
-# Added entries (1 items) - 2025-11-28 20:41:28
-dev.py

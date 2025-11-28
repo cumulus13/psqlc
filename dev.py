@@ -56,9 +56,9 @@ def notify(title, message):
 # Main logic
 # -----------------------------------
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] != "start":
-        print("Usage: python def start")
-        sys.exit(1)
+    # if len(sys.argv) < 2 or sys.argv[1] != "start":
+    #     print("Usage: python def start")
+    #     sys.exit(1)
 
     print("Monitoring started...")
     print(f"Parent   : {PARENT_FILE}")
