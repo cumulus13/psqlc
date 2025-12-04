@@ -19,24 +19,16 @@ if len(sys.argv) > 1 and any('--debug' == arg or '-d' == arg for arg in sys.argv
 else:
     os.environ['NO_LOGGING'] = "1"
 
-# try:
-#     from richcolorlog import setup_logging
-#     logger = setup_logging()
-# except:
-#     import logging
-#     logger = logging.getLogger()
+tprint = None
 
-# os.environ.update({'NO_LOGGING':'1'})
-
-# ...existing code...
-def get_logger(name: str = None, level: int = None, prefer_rich: bool = True, force_plain: bool = False):
+def get_logger(name: str = 'psqlc', level: int = None, prefer_rich: bool = True, force_plain: bool = False):
     """Return a configured logger instance.
     - prefer_rich: try richcolorlog.setup_logging if available
     - force_plain: force stdlib logging (or use FORCE_PLAIN_LOG env)
     - level: optional logging level (int). If None, uses DEBUG when DEBUG env is truthy.
     """
     import logging
-    import os
+    global tprint
 
     # resolve level
     if level is None:
@@ -50,19 +42,20 @@ def get_logger(name: str = None, level: int = None, prefer_rich: bool = True, fo
     # try richcolorlog if requested
     if prefer_rich:
         try:
-            from richcolorlog import setup_logging as _setup
+            from richcolorlog import setup_logging as _setup, print_exception as tprint
             # setup_logging implementations vary; try to call flexibly
+            if name and name == '__main__': name = 'psqlc'
             try:
                 logger_obj = _setup(name=name, level=level)
             except TypeError:
                 try:
                     logger_obj = _setup()
-                except Exception:
+                except Exception as e:
                     import logging as _logging
                     _logging.basicConfig(level=level)
                     logger_obj = _logging.getLogger(name)
             return logger_obj
-        except Exception:
+        except Exception as e:
             # fallback to stdlib logging
             import logging as _logging
             _logging.basicConfig(level=level)
@@ -142,16 +135,16 @@ def find_settings_recursive1(start_path: str = None, max_depth: int = 5, filenam
     
     return search_directory(start_path)
 
-def find_any_config(start_path: str = None) -> Optional[str]:
+def find_any_config(start_path: str = None, max_depth_up: int = 0, max_depth_down: str = 1) -> Optional[str]:
     for ext in [".env", ".json", ".yaml"]:
-        path = find_settings_recursive(start_path, filename=ext)
+        path = find_settings_recursive(start_path, filename=ext, max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         if path:
             return path
     return None
 
 def find_settings_recursive(
     start_path: str = None,
-    max_depth_up: int = 10,
+    max_depth_up: int = 0,
     max_depth_down: int = 5,
     filename: str = 'settings.py'
 ) -> Optional[str]:
@@ -160,12 +153,16 @@ def find_settings_recursive(
     2. If not found, go upward (parent, grandparent, ...) up to root,
        and for *each* ancestor, scan its entire subtree downward.
     """
-    import os
     from pathlib import Path
+
+    logger.warning(f"max_depth_up: {max_depth_up}")
+    logger.warning(f"max_depth_down: {max_depth_down}")
+    logger.warning(f"start_path: {start_path}")
 
     if start_path is None:
         start_path = os.getcwd()
     start_path = Path(start_path).resolve()
+    logger.warning(f"start_path: {start_path}")
 
     # Helper: recursive downward search from a root dir
     def search_down(root: Path, current_depth: int = 0) -> Optional[Path]:
@@ -186,22 +183,27 @@ def find_settings_recursive(
 
     # Step 1: Search downward from current directory
     result = search_down(start_path)
+    logger.notice(f"search down result [0]: {result}")
     if result:
         return str(result)
 
     # Step 2: Walk upward and search downward from each ancestor
-    current = start_path.parent
-    depth = 0
-    while current != current.parent and depth <= max_depth_up:
-        result = search_down(current)
-        if result:
-            return str(result)
-        current = current.parent
-        depth += 1
+    if max_depth_up > 0:
+        current = start_path.parent
+        logger.debug(f"current: {current}")
+        logger.debug(f"current.parent: {current.parent}")    
+        depth = 0
+        while current != current.parent and depth <= max_depth_up:
+            result = search_down(current)
+            logger.notice(f"search down result [1]: {result}")
+            if result:
+                return str(result)
+            current = current.parent
+            depth += 1
 
     return None
 
-def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]:
+def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_depth_down: str = 1) -> Optional[Dict[str, Any]]:
     """Parse Django settings.py or config files for database configuration"""
     global _settings_cache
     
@@ -215,7 +217,16 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
             if os.path.isfile(current_settings):
                 settings_path = current_settings
             else:
-                settings_path = find_settings_recursive()
+                settings_path = find_settings_recursive(max_depth_up=max_depth_up, max_depth_down=max_depth_down)
+
+        logger.debug(f"settings_path: {settings_path}")
+
+        if settings_path is None:
+            current_settings = os.path.join(os.getcwd(), "config.json")
+            if os.path.isfile(current_settings):
+                settings_path = current_settings
+            else:
+                settings_path = find_settings_recursive(filename="config.json", max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         
         logger.debug(f"settings_path: {settings_path}")
         if settings_path: logger.info(f"os.path.isfile(settings_path): {os.path.isfile(settings_path)}")
@@ -226,7 +237,7 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
             #     logger.notice(f"settings_path: {settings_path}")
             #     if settings_path:
             #         break
-            settings_path = find_any_config()
+            settings_path = find_any_config(max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         
         if not settings_path or not os.path.isfile(settings_path):
             return None
@@ -273,8 +284,10 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
             logger.debug(f"processing '{final_path}' ...")
             from envdot import load_env
             cfg = load_env(final_path)
+
+            logger.notice(f"cfg: {cfg._data}")
             
-            for key in ['engine', 'ENGINE', 'TYPE', 'type']:
+            for key in ['engine', 'ENGINE', 'TYPE', 'type', 'db_type']:
                 if cfg.get(key, '').lower() in ["django.db.backends.postgresql", "postgresql", "psql", "postgres", "postgre"] or cfg.get("POSTGRESQL_PORT") or cfg.get("postgresql_port") or cfg.get("POSTGRES_PORT") or cfg.get("postgres_port") or cfg.get("POSTGRE_PORT") or cfg.get("postgre_port"):
                     rich_print(f"📄 Found config at: {final_path}", color="#00CED1")
                     engine = cfg.get("ENGINE")
@@ -294,6 +307,11 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                     cfg.get("postgre_username") or \
                                     cfg.get("postgre_user") or \
                                     
+                                    cfg.get("DB_USER") or \
+                                    cfg.get("DB_USERNAME") or \
+                                    cfg.get("db_user") or \
+                                    cfg.get("db_username") or \
+
                                     cfg.get("USER") or \
                                     cfg.get("USERNAME") or \
                                     cfg.get("user") or \
@@ -314,9 +332,14 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                     
                                     cfg.get("PASSWORD") or \
                                     cfg.get("PASS") or \
+                                    cfg.get("pass") or \
                                     cfg.get("password") or \
-                                    cfg.get("pass"),
-                        'database': cfg.get("POSTGRESQL_DB_NAME") or \
+                                    cfg.get("db_password") or \
+                                    cfg.get("DB_PASSWORD") or \
+                                    cfg.get("DB_PASS") or \
+                                    cfg.get("db_pass"),
+                        'database': cfg.get("POSTGRESQL_DATABASE") or \
+                                    cfg.get("POSTGRESQL_DB_NAME") or \
                                     cfg.get("POSTGRESQL_DBNAME") or \
                                     cfg.get("POSTGRESQL_DB") or \
                                     cfg.get("POSTGRESQL_NAME") or \
@@ -328,7 +351,12 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                     cfg.get("POSTGRE_DBNAME") or \
                                     cfg.get("POSTGRE_DB") or \
                                     cfg.get("POSTGRE_NAME") or \
+                                    cfg.get("POSTGRE_DATABASE") or \
+                                    cfg.get("POSTGRES_DATABASE") or \
 
+                                    cfg.get("postgresql_database") or \
+                                    cfg.get("postgres_database") or \
+                                    cfg.get("postgre_database") or \
                                     cfg.get("postgresql_db_name") or \
                                     cfg.get("postgresql_dbname") or \
                                     cfg.get("postgresql_db") or \
@@ -342,11 +370,11 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                     cfg.get("postgre_db") or \
                                     cfg.get("postgre_name") or \
 
-                                    cfg.get("NAME") or \
+                                    # cfg.get("NAME") or \
                                     cfg.get("DB") or \
                                     cfg.get("DB_NAME") or \
                                     cfg.get("DBNAME") or \
-                                    cfg.get("name") or \
+                                    # cfg.get("name") or \
                                     cfg.get("db") or \
                                     cfg.get("db_name") or \
                                     cfg.get("dbname"),
@@ -364,6 +392,9 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                 cfg.get("postgre_hostname") or \
                                 cfg.get("postgre_host") or \
                                 
+                                cfg.get("db_host") or \
+                                cfg.get("DB_HOST") or \
+                                
                                 cfg.get("SERVER") or \
                                 cfg.get("host") or \
                                 cfg.get("hostname") or \
@@ -375,12 +406,74 @@ def parse_django_settings(settings_path: str = None) -> Optional[Dict[str, Any]]
                                 cfg.get("postgresql_port") or \
                                 cfg.get("postgres_port") or \
                                 cfg.get("postgre_port") or \
+                                
+                                cfg.get("db_port") or \
+                                cfg.get("DB_PORT") or \
 
                                 cfg.get("PORT") or \
                                 cfg.get("port")
                     }
                     # print(f"_settings_cache: {_settings_cache}")
                     logger.notice(f"[{final_path}] _settings_cache: {_settings_cache}")
+                    
+                    logger.debug(f'POSTGRESQL_USERNAME = {cfg.get("POSTGRESQL_USERNAME")}')
+                    logger.debug(f'POSTGRESQL_USER = {cfg.get("POSTGRESQL_USER")}')
+                    logger.debug(f'POSTGRES_USERNAME = {cfg.get("POSTGRES_USERNAME")}')
+                    logger.debug(f'POSTGRES_USER = {cfg.get("POSTGRES_USER")}')
+                    logger.debug(f'POSTGRE_USERNAME = {cfg.get("POSTGRE_USERNAME")}')
+                    logger.debug(f'POSTGRE_USER = {cfg.get("POSTGRE_USER")}')
+                    logger.debug(f'postgresql_username = {cfg.get("postgresql_username")}')
+                    logger.debug(f'postgresql_user = {cfg.get("postgresql_user")}')
+                    logger.debug(f'postgres_username = {cfg.get("postgres_username")}')
+                    logger.debug(f'postgres_user = {cfg.get("postgres_user")}')
+                    logger.debug(f'postgre_username = {cfg.get("postgre_username")}')
+                    logger.debug(f'postgre_user = {cfg.get("postgre_user")}')
+                    logger.debug(f'DB_USER = {cfg.get("DB_USER")}')
+                    logger.debug(f'db_user = {cfg.get("db_user")}')
+                    logger.debug(f'USER = {cfg.get("USER")}')
+                    logger.debug(f'USERNAME = {cfg.get("USERNAME")}')
+                    logger.debug(f'user = {cfg.get("user")}')
+                    logger.debug(f'username = {cfg.get("username")}')
+                    
+                    logger.debug(f'cfg.get("POSTGRESQL_DATABASE") = {cfg.get("POSTGRESQL_DATABASE")}')
+                    logger.debug(f'cfg.get("POSTGRES_DATABASE") = {cfg.get("POSTGRES_DATABASE")}')
+                    logger.debug(f'cfg.get("POSTGRE_DATABASE") = {cfg.get("POSTGRE_DATABASE")}')
+                    logger.debug(f'cfg.get("POSTGRESQL_DB_NAME") = {cfg.get("POSTGRESQL_DB_NAME")}')
+                    logger.debug(f'cfg.get("POSTGRESQL_DBNAME") = {cfg.get("POSTGRESQL_DBNAME")}')
+                    logger.debug(f'cfg.get("POSTGRESQL_DB") = {cfg.get("POSTGRESQL_DB")}')
+                    logger.debug(f'cfg.get("POSTGRESQL_NAME") = {cfg.get("POSTGRESQL_NAME")}')
+                    logger.debug(f'cfg.get("POSTGRES_DB_NAME") = {cfg.get("POSTGRES_DB_NAME")}')
+                    logger.debug(f'cfg.get("POSTGRES_DBNAME") = {cfg.get("POSTGRES_DBNAME")}')
+                    logger.debug(f'cfg.get("POSTGRES_DB") = {cfg.get("POSTGRES_DB")}')
+                    logger.debug(f'cfg.get("POSTGRES_NAME") = {cfg.get("POSTGRES_NAME")}')
+                    logger.debug(f'cfg.get("POSTGRE_DB_NAME") = {cfg.get("POSTGRE_DB_NAME")}')
+                    logger.debug(f'cfg.get("POSTGRE_DBNAME") = {cfg.get("POSTGRE_DBNAME")}')
+                    logger.debug(f'cfg.get("POSTGRE_DB") = {cfg.get("POSTGRE_DB")}')
+                    logger.debug(f'cfg.get("POSTGRE_NAME") = {cfg.get("POSTGRE_NAME")}')
+
+                    logger.debug(f'cfg.get("postgresql_database") = {cfg.get("postgresql_database")}')
+                    logger.debug(f'cfg.get("postgres_database") = {cfg.get("postgres_database")}')
+                    logger.debug(f'cfg.get("postgre_database") = {cfg.get("postgre_database")}')
+                    logger.debug(f'cfg.get("postgresql_db_name") = {cfg.get("postgresql_db_name")}')
+                    logger.debug(f'cfg.get("postgresql_dbname") = {cfg.get("postgresql_dbname")}')
+                    logger.debug(f'cfg.get("postgresql_db") = {cfg.get("postgresql_db")}')
+                    logger.debug(f'cfg.get("postgresql_name") = {cfg.get("postgresql_name")}')
+                    logger.debug(f'cfg.get("postgres_db_name") = {cfg.get("postgres_db_name")}')
+                    logger.debug(f'cfg.get("postgres_dbname") = {cfg.get("postgres_dbname")}')
+                    logger.debug(f'cfg.get("postgres_db") = {cfg.get("postgres_db")}')
+                    logger.debug(f'cfg.get("postgres_name") = {cfg.get("postgres_name")}')
+                    logger.debug(f'cfg.get("postgre_db_name") = {cfg.get("postgre_db_name")}')
+                    logger.debug(f'cfg.get("postgre_dbname") = {cfg.get("postgre_dbname")}')
+                    logger.debug(f'cfg.get("postgre_db") = {cfg.get("postgre_db")}')
+                    logger.debug(f'cfg.get("postgre_name") = {cfg.get("postgre_name")}')
+
+                    logger.debug(f'cfg.get("DB") = {cfg.get("DB")}')
+                    logger.debug(f'cfg.get("DB_NAME") = {cfg.get("DB_NAME")}')
+                    logger.debug(f'cfg.get("DBNAME") = {cfg.get("DBNAME")}')
+                    logger.debug(f'cfg.get("db") = {cfg.get("db")}')
+                    logger.debug(f'cfg.get("db_name") = {cfg.get("db_name")}')
+                    logger.debug(f'cfg.get("dbname") = {cfg.get("dbname")}')
+
                     return _settings_cache
     
     except Exception as e:
@@ -416,12 +509,12 @@ def get_version() -> str:
 # ============================================================================
 
 async def get_connection(host: str, port: int, user: str, password: str, 
-                        database: str = "postgres", auto_settings: bool = True, settings_path = None):
+                        database: str = "postgres", auto_settings: bool = True, settings_path = None, max_depth_up: int = 0, max_depth_down: str = 1):
     """Create async database connection"""
     import asyncpg
     
     if auto_settings:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         # print(f"db_config: {db_config}")
         if db_config:
             host = db_config.get('host') or host or os.getenv("HOST")
@@ -432,7 +525,7 @@ async def get_connection(host: str, port: int, user: str, password: str,
             database = database or os.getenv('DATABASE') or os.getenv('DB_NAME') or os.getenv('DB')
     else:
         for cf in [".env", ".json", ".yaml"]:
-            settings_path = find_settings_recursive(filename=cf)
+            settings_path = find_settings_recursive(filename=cf, max_depth_up=max_depth_up, max_depth_down=max_depth_down)
             if settings_path:
                 break
         
@@ -476,7 +569,7 @@ async def get_connection(host: str, port: int, user: str, password: str,
 
 def get_db_config_or_args(args):
     """Get database config from settings or args"""
-    db_config = parse_django_settings()
+    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
     # print(f"db_config: {db_config}")
     if db_config:
         return {
@@ -504,7 +597,7 @@ async def show_databases(args):
     from rich.table import Table
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, auto_settings=False)
+    conn = await get_connection(**config, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         results = await conn.fetch("""
@@ -545,7 +638,7 @@ async def show_tables(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -554,7 +647,7 @@ async def show_tables(args):
             return
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, database=args.database, auto_settings=False)
+    conn = await get_connection(**config, database=args.database, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         results = await conn.fetch("""
@@ -596,7 +689,7 @@ async def show_users(args):
     from rich.table import Table
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, auto_settings=False)
+    conn = await get_connection(**config, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         results = await conn.fetch("""
@@ -640,7 +733,7 @@ async def show_connections(args):
     from rich.table import Table
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, auto_settings=False)
+    conn = await get_connection(**config, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         results = await conn.fetch("""
@@ -689,7 +782,7 @@ async def show_indexes(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -698,7 +791,7 @@ async def show_indexes(args):
             return
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, database=args.database, auto_settings=False)
+    conn = await get_connection(**config, database=args.database, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         if args.table:
@@ -753,14 +846,14 @@ async def show_size(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
         else:
             # Show all database sizes
             config = get_db_config_or_args(args)
-            conn = await get_connection(**config, auto_settings=False)
+            conn = await get_connection(**config, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
             
             try:
                 results = await conn.fetch("""
@@ -790,7 +883,7 @@ async def show_size(args):
             return
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, database=args.database, auto_settings=False)
+    conn = await get_connection(**config, database=args.database, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         if args.table:
@@ -838,6 +931,21 @@ async def show_size(args):
     finally:
         await conn.close()
 
+async def connect(database="template1", user='postgres', password='', host='127.0.0.1', port=5432):
+    import asyncpg
+    try:
+        conn = await asyncpg.connect(database=database, user=user, password=password, host=host, port=port)
+        return conn
+    except Exception as e:
+        if str(os.getenv("TRACEBACK", "0")).lower() in ["1", "true", "yes"]:
+            if tprint:
+                tprint(e)
+            else:
+                import traceback
+                print(traceback.format_exc())
+        else:
+            rich_print(f"❌ Error (new user connection): {e}", color="#FF4500", bold=True)
+    return
 
 # ============================================================================
 # DESCRIBE & QUERY COMMANDS
@@ -849,7 +957,7 @@ async def describe_table(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -862,7 +970,7 @@ async def describe_table(args):
         return
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, database=args.database, auto_settings=False)
+    conn = await get_connection(**config, database=args.database, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         results = await conn.fetch("""
@@ -906,7 +1014,7 @@ async def execute_query(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -925,7 +1033,7 @@ async def execute_query(args):
             return
     
     config = get_db_config_or_args(args)
-    conn = await get_connection(**config, database=args.database, auto_settings=False)
+    conn = await get_connection(**config, database=args.database, auto_settings=False, max_depth_up=args.up_level, max_depth_down=args.down_level)
     
     try:
         if args.query.strip().upper().startswith('SELECT'):
@@ -967,16 +1075,30 @@ async def create_user_db(args):
     """Create PostgreSQL user and database"""
     import asyncpg
     from pwinput import pwinput
+    from configset import configset
+    from pathlib import Path
+    config = configset(str(Path(__file__).parent / 'psqlc.ini'))
     
-    db_config = parse_django_settings()
+    logger.notice(f"args.CONFIG: {args.CONFIG}")
+    logger.notice(f"LEN args.CONFIG: {len(args.CONFIG)}")
+    logger.notice(f"args.up_level: {args.up_level}")
+    logger.notice(f"args.down_level: {args.down_level}")
 
+    if args.CONFIG:
+        args.up_level = 0
+        args.down_level = 0
+    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+
+    logger.debug(f"db_config: {db_config}")
+    logger.debug(f"config.get_config('server', 'host'): {config.get_config('server', 'host')}")
     username = password = database = None
-    PORT = args.port or DEFAULT_PORT
-    HOST = args.hostname
+    PORT = config.get_config('server', 'port') or args.port or DEFAULT_PORT
+    HOST = config.get_config('server', 'host') or args.hostname
     
     # Parse configuration
     if args.CONFIG and len(args.CONFIG) == 3:
         username, password, database = args.CONFIG
+        logger.debug(f"username: {username}, password: {'*****' if password else ''}, database: {database}, HOST: {HOST}, PORT: {PORT}")
     elif not args.username and not args.password and not args.database:
         if db_config:
             username = db_config.get('username')
@@ -986,11 +1108,11 @@ async def create_user_db(args):
             PORT = db_config.get('port') or PORT
     elif args.CONFIG and len(args.CONFIG) == 1:
         if os.path.isfile(args.CONFIG[0]) and args.CONFIG[0].endswith("settings.py"):
-            db_config = parse_django_settings(args.CONFIG[0])
+            db_config = parse_django_settings(args.CONFIG[0], max_depth_up=args.up_level, max_depth_down=args.down_level)
         elif os.path.isdir(args.CONFIG[0]):
             settings_path = os.path.join(args.CONFIG[0], "settings.py")
             if os.path.isfile(settings_path):
-                db_config = parse_django_settings(settings_path)
+                db_config = parse_django_settings(settings_path, max_depth_up=args.up_level, max_depth_down=args.down_level)
         
         if db_config:
             username = db_config.get('username')
@@ -999,11 +1121,14 @@ async def create_user_db(args):
             HOST = db_config.get('host') or HOST
             PORT = db_config.get('port') or PORT
     
+    logger.debug(f"username: {username}, password: {'*****' if password else ''}, database: {database}, HOST: {HOST}, PORT: {PORT}")
     # if not username or not password or not database:
-    username = username or args.username or db_config.get('username') if db_config else None
-    password = password or args.password or db_config.get('password') if db_config else None
-    database = database or args.database or db_config.get('database') if db_config else None
+    username = username or args.username or (db_config.get('username') if db_config else None)
+    password = password or args.password or (db_config.get('password') if db_config else None)
+    database = database or args.database or (db_config.get('database') if db_config else None)
     
+    logger.debug(f"username: {username}, password: {'*****' if password else ''}, database: {database}, HOST: {HOST}, PORT: {PORT}")
+
     args.password = password if not args.password else args.password
     args.user = username if not args.user else args.user
     args.database = database if not args.database else args.database
@@ -1065,8 +1190,16 @@ async def create_user_db(args):
     
     # Create database
     try:
-        conn = await asyncpg.connect(database="template1", user=username, password=password, host=HOST, port=PORT)
-        
+        logger.warning(f"username = {username}")
+        logger.warning(f"password = {password}")
+        logger.warning(f"HOST = {HOST}")
+        logger.warning(f"PORT = {PORT}")
+
+        conn = await connect(database="template1", user=username, password=password, host=HOST, port=PORT)
+        if not conn:
+            rich_print(f"❌ Error (Failed connect to database server)", color="#FF4500", bold=True)
+            return
+
         result = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", database)
         if result:
             rich_print(f"⚠️ Database '{database}' already exists.", color="#FFFF00", bold=True)
@@ -1096,9 +1229,12 @@ async def create_user_db(args):
         rich_print("🔒 Logged out from new user session", color="#00CED1")
     
     except Exception as e:
-        if os.getenv("TRACEBACK", "0").lower() in ["1", "true", "yes"]:
-            import traceback
-            print(traceback.format_exc())
+        if str(os.getenv("TRACEBACK", "0")).lower() in ["1", "true", "yes"]:
+            if tprint:
+                tprint(e)
+            else:
+                import traceback
+                print(traceback.format_exc())
         else:
             rich_print(f"❌ Error (new user connection): {e}", color="#FF4500", bold=True)
 
@@ -1108,7 +1244,7 @@ async def drop_database(args):
     import asyncpg
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1200,7 +1336,7 @@ def backup_database(args):
     from datetime import datetime
     
     if not args.database:
-        db_config = parse_django_settings()
+        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1239,6 +1375,8 @@ def setup_argument_parser():
     parser.add_argument("-U", "--user", default="postgres", help="PostgreSQL superuser (default: postgres)")
     parser.add_argument("-P", "--passwd", help="PostgreSQL superuser password")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"PostgreSQL server port (default: {DEFAULT_PORT})")
+    parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument('-v', "--version", action="store_true", help="Show version")
     
@@ -1253,6 +1391,8 @@ def setup_argument_parser():
     show_tables_parser = show_subparsers.add_parser('tables', help='List tables in database', formatter_class=CustomRichHelpFormatter)
     show_tables_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     show_tables_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    show_tables_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    show_tables_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     show_subparsers.add_parser('users', help='List all users/roles', formatter_class=CustomRichHelpFormatter)
     show_subparsers.add_parser('connections', help='Show active connections', formatter_class=CustomRichHelpFormatter)
@@ -1261,11 +1401,15 @@ def setup_argument_parser():
     show_indexes_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     show_indexes_parser.add_argument("-t", "--table", help="Table name (optional)")
     show_indexes_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    show_indexes_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    show_indexes_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     show_size_parser = show_subparsers.add_parser('size', help='Show sizes', formatter_class=CustomRichHelpFormatter)
     show_size_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     show_size_parser.add_argument("-t", "--table", help="Table name (optional)")
     show_size_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    show_size_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    show_size_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     # CREATE command
     create_parser = subparsers.add_parser('create', help='Create user and database', formatter_class=CustomRichHelpFormatter)
@@ -1274,12 +1418,16 @@ def setup_argument_parser():
     create_parser.add_argument("-p", "--password", help="Password for new user")
     create_parser.add_argument("-d", "--database", help="Database name to create")
     create_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    create_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    create_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     # DESCRIBE command
     desc_parser = subparsers.add_parser('describe', help='Show table structure', formatter_class=CustomRichHelpFormatter)
     desc_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     desc_parser.add_argument("-t", "--table", required=True, help="Table name")
     desc_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    desc_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    desc_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     # QUERY command
     query_parser = subparsers.add_parser('query', help='Execute SQL query', formatter_class=CustomRichHelpFormatter)
@@ -1288,12 +1436,16 @@ def setup_argument_parser():
     query_parser.add_argument("--readonly", action="store_true", help="Prevent destructive operations")
     query_parser.add_argument("--limit", type=int, help="Limit rows displayed (default: 100)")
     query_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    query_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    query_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     # BACKUP command
     backup_parser = subparsers.add_parser('backup', help='Backup database', formatter_class=CustomRichHelpFormatter)
     backup_parser.add_argument("-d", "--database", help="Database name (auto-detect if not provided)")
     backup_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    
+    backup_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    backup_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
+
     # DROP command
     drop_parser = subparsers.add_parser('drop', help='Drop database or user', formatter_class=CustomRichHelpFormatter)
     drop_subparsers = drop_parser.add_subparsers(dest='drop_command', help='Drop options')
@@ -1305,6 +1457,8 @@ def setup_argument_parser():
     drop_user_parser = drop_subparsers.add_parser('user', help='Drop a user/role', formatter_class=CustomRichHelpFormatter)
     drop_user_parser.add_argument("-u", "--username", required=True, help="Username to drop")
     drop_user_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    drop_user_parser.add_argument("-ul", '--up-level', action="store", help="Max deep up level config file search, default=0", default=0)
+    drop_user_parser.add_argument("-dl", '--down-level', action="store", help="Max deep down level config file search, default=1", default=1)
     
     return parser
 
@@ -1326,7 +1480,9 @@ def ensure_superuser_password(args, db_config):
     """
     from pwinput import pwinput
 
-    if command_requires_superuser(args):
+    check = command_requires_superuser(args)
+    logger.debug(f"check command_requires_superuser(args): {check}")
+    if check:
         # prefer db_config, then env, then interactive prompt
         if not getattr(args, "passwd", None):
             if db_config and db_config.get("password"):
@@ -1341,46 +1497,15 @@ def ensure_superuser_password(args, db_config):
                     # interactive prompt because superuser password is required
                     args.passwd = pwinput(f"[{os.getpid()}]Password for {args.user}: ")
 
-
-# async def run_command(args, show_parser, drop_parser):
-#     """Route to appropriate command handler"""
-#     if args.command == 'create':
-#         await create_user_db(args)
-#     elif args.command == 'show':
-#         if args.show_command == 'dbs':
-#             await show_databases(args)
-#         elif args.show_command == 'tables':
-#             await show_tables(args)
-#         elif args.show_command == 'users':
-#             await show_users(args)
-#         elif args.show_command == 'connections':
-#             await show_connections(args)
-#         elif args.show_command == 'indexes':
-#             await show_indexes(args)
-#         elif args.show_command == 'size':
-#             await show_size(args)
-#         else:
-#             show_parser.print_help()
-#     elif args.command == 'describe':
-#         await describe_table(args)
-#     elif args.command == 'query':
-#         await execute_query(args)
-#     elif args.command == 'backup':
-#         backup_database(args)
-#     elif args.command == 'drop':
-#         if args.drop_command == 'database':
-#             await drop_database(args)
-#         elif args.drop_command == 'user':
-#             await drop_user(args)
-#         else:
-#             drop_parser.print_help()
-
 async def run_command(args, show_parser, drop_parser):
     """Route to appropriate command handler with retry-on-permission failure."""
     from pwinput import pwinput
 
     async def _dispatch():
         if args.command == 'create':
+            if hasattr(args, 'CONFIG'):
+                args.up_level = 0
+                args.down_level = 0
             await create_user_db(args)
         elif args.command == 'show':
             if args.show_command == 'dbs':
@@ -1453,10 +1578,7 @@ def main():
     from rich.console import Console
     console = Console()
     import argparse
-
-    db_config = parse_django_settings()
-    logger.info(f"db_config = {db_config}")
-        
+    
     # Early version check
     if '--version' in sys.argv or '-v' in sys.argv:
         Console().print(f"📦 [bold #FFFF00]Version:[/] [bold #00FFFF]{get_version()}[/]")
@@ -1470,9 +1592,16 @@ def main():
     
     args = parser.parse_args()
 
-    args.database = db_config.get('database') or args.database
-    args.hostname = db_config.get('host') or args.hostname
-    args.port = int(db_config.get('port')) if db_config.get('port') else args.port
+    if hasattr(args, 'CONFIG'):
+        args.up_level = 0
+        args.down_level = 0
+
+    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+    logger.info(f"db_config:: {db_config}")
+    if db_config:
+        args.database = db_config.get('database') or args.database
+        args.hostname = db_config.get('host') or args.hostname
+        args.port = int(db_config.get('port')) if db_config.get('port') else args.port
     
     # Set debug mode
     if hasattr(args, 'debug') and args.debug:

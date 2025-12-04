@@ -28,3 +28,6 @@ psqltools.sublime-project
 *.0
 *.backup
 build.bat
+
+# Added entries (1 items)
+*code-workspace*
