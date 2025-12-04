@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psqlc"
-version = "1.1.20"
+version = "1.1.19"
 description = "Feature-rich command-line interface tool for managing PostgreSQL databases. Built with `asyncpg` and featuring beautiful output formatting with Rich, it provides intelligent auto-detection of database configurations from Django settings, environment files, and various configuration formats."
 requires-python = ">=3.6"
 keywords = [ "postgresql", "automation", "analytics", "developer tools", "monitoring", "devops", "django", "asyncpg", "dotenv",]
 classifiers = [ "Development Status :: 5 - Production/Stable", "Intended Audience :: Developers", "Topic :: Software Development :: Build Tools", "Topic :: System :: Filesystems", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.6", "Programming Language :: Python :: 3.7", "Programming Language :: Python :: 3.8", "Programming Language :: Python :: 3.9", "Programming Language :: Python :: 3.10", "Programming Language :: Python :: 3.11", "Operating System :: OS Independent", "Environment :: Console",]
 dependencies = [ "rich", "asyncpg", "licface", "envdot", "pwinput", "richcolorlog",]
 license = "MIT"
-license-files = [ "LICENSE",]
+license-files = ["LICENSE"]
+
 [[project.authors]]
 name = "cumulus13"
 email = "cumulus13@gmail.com"
@@ -19,6 +20,7 @@ email = "cumulus13@gmail.com"
 [project.readme]
 file = "README.md"
 content-type = "text/markdown"
+
 
 [project.optional-dependencies]
 dev = [ "cython",]
