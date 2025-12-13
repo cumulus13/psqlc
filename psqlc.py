@@ -8,6 +8,7 @@ import sys
 import os
 import asyncio
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 if len(sys.argv) > 1 and any('--debug' == arg or '-d' == arg for arg in sys.argv):
     print("🐞 Debug mode enabled")
@@ -203,11 +204,31 @@ def find_settings_recursive(
 
     return None
 
+def parse_postgresql_url(connection_string):
+    """
+    Parse PostgreSQL connection URL and display its components
+    """
+    # Parse URLs using urllib.parse
+    parsed = urlparse(connection_string)
+    
+    # Extract components from URL
+    components = {
+        'protocol': parsed.scheme,
+        'username': parsed.username,
+        'password': parsed.password,
+        'host': parsed.hostname,
+        'port': parsed.port,
+        'database': parsed.path[1:],  # Hilangkan slash depan
+        'query_params': parsed.query,
+        'original_url': connection_string
+    }
+    
+    return components
+
 def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_depth_down: str = 1) -> Optional[Dict[str, Any]]:
     """Parse Django settings.py or config files for database configuration"""
     global _settings_cache
     
-
     if _settings_cache is not None:
         return _settings_cache
     logger.debug(f"settings_path: {settings_path}")
@@ -229,6 +250,7 @@ def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_
                 settings_path = find_settings_recursive(filename="config.json", max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         
         logger.debug(f"settings_path: {settings_path}")
+        
         if settings_path: logger.info(f"os.path.isfile(settings_path): {os.path.isfile(settings_path)}")
 
         if not settings_path or not os.path.isfile(settings_path):
@@ -241,14 +263,13 @@ def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_
         
         if not settings_path or not os.path.isfile(settings_path):
             return None
-        # print(f"settings_path: {settings_path}")
-        # Parse settings.py
-
+        
         final_path = settings_path
         logger.emergency(f"final_path: {final_path}")
         logger.emergency(f"final_path is file: {os.path.isfile(final_path)}")
 
         logger.warning(f"CHECK [1]: {final_path.endswith('settings.py') or 'settings.py' in final_path}")
+        
         if final_path.endswith('settings.py') or 'settings.py' in final_path:
             logger.alert(f"processsing 'settings.py' in final_path ...")
             settings = load_settings_from_path(final_path)
@@ -286,7 +307,21 @@ def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_
             cfg = load_env(final_path)
 
             logger.notice(f"cfg: {cfg._data}")
-            
+
+            logger.info(f"'database_url' in list(cfg.keys()) or  'DATABASE_URL' in list(cfg.keys()): {'database_url' in list(cfg.keys()) or  'DATABASE_URL' in list(cfg.keys())}")
+
+            try:
+                check_db_url = list(filter(lambda k: k in list(cfg.keys()), ['database_url', 'DATABASE_URL', 'database_uri', 'DATABASE_URI']))
+                logger.emergency(f"check_db_url: {check_db_url}")
+                if check_db_url:
+                    config_db = parse_postgresql_url(cfg.get(check_db_url[0]))
+                    logger.debug(f"config_db: {config_db}")
+                    if config_db.get('host') and config_db.get('username') and config_db.get('database') and config_db.get('protocol') == 'postgresql':
+                        logger.notice("return config_db")
+                        return config_db
+            except Exception as e:
+                logger.exception(e)
+
             for key in ['engine', 'ENGINE', 'TYPE', 'type', 'db_type']:
                 if cfg.get(key, '').lower() in ["django.db.backends.postgresql", "postgresql", "psql", "postgres", "postgre"] or cfg.get("POSTGRESQL_PORT") or cfg.get("postgresql_port") or cfg.get("POSTGRES_PORT") or cfg.get("postgres_port") or cfg.get("POSTGRE_PORT") or cfg.get("postgre_port"):
                     rich_print(f"📄 Found config at: {final_path}", color="#00CED1")
@@ -483,7 +518,9 @@ def parse_django_settings(settings_path: str = None, max_depth_up: int = 0, max_
         if str(os.getenv('TRACEBACK', '0')).lower() in ['1', 'true', 'yes']:
             import traceback
             logger.error(traceback.format_exc())
-    
+        if str(os.getenv('DEBUG', '0')).lower() in ['1', 'true', 'yes']:
+            logger.exception(e)
+
     return None
 
 
@@ -514,7 +551,7 @@ async def get_connection(host: str, port: int, user: str, password: str,
     import asyncpg
     
     if auto_settings:
-        db_config = parse_django_settings(max_depth_up=max_depth_up, max_depth_down=max_depth_down)
+        db_config = parse_django_settings(settings_path, max_depth_up=max_depth_up, max_depth_down=max_depth_down)
         # print(f"db_config: {db_config}")
         if db_config:
             host = db_config.get('host') or host or os.getenv("HOST")
@@ -569,7 +606,7 @@ async def get_connection(host: str, port: int, user: str, password: str,
 
 def get_db_config_or_args(args):
     """Get database config from settings or args"""
-    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+    db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
     # print(f"db_config: {db_config}")
     if db_config:
         return {
@@ -638,7 +675,7 @@ async def show_tables(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -782,7 +819,7 @@ async def show_indexes(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -846,7 +883,7 @@ async def show_size(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -957,7 +994,7 @@ async def describe_table(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1014,7 +1051,7 @@ async def execute_query(args):
     from rich.table import Table
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1087,7 +1124,7 @@ async def create_user_db(args):
     if args.CONFIG:
         args.up_level = 0
         args.down_level = 0
-    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+    db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
 
     logger.debug(f"db_config: {db_config}")
     logger.debug(f"config.get_config('server', 'host'): {config.get_config('server', 'host')}")
@@ -1244,7 +1281,7 @@ async def drop_database(args):
     import asyncpg
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1336,7 +1373,7 @@ def backup_database(args):
     from datetime import datetime
     
     if not args.database:
-        db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+        db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
         if db_config and db_config.get('database'):
             args.database = db_config.get('database')
             rich_print(f"📄 Using database: {args.database}", color="#00CED1")
@@ -1371,6 +1408,7 @@ def setup_argument_parser():
     )
     
     # Global options
+    parser.add_argument("CONFIG_FILE", nargs="?", help = "Optional config file (*.env, *.ini, *.toml, *.json, *.yml/yaml)")
     parser.add_argument("-H", "--hostname", default=HOST, help=f"PostgreSQL server address (default: {HOST})")
     parser.add_argument("-U", "--user", default="postgres", help="PostgreSQL superuser (default: postgres)")
     parser.add_argument("-P", "--passwd", help="PostgreSQL superuser password")
@@ -1596,8 +1634,10 @@ def main():
         args.up_level = 0
         args.down_level = 0
 
-    db_config = parse_django_settings(max_depth_up=args.up_level, max_depth_down=args.down_level)
+
+    db_config = parse_django_settings(args.CONFIG_FILE, max_depth_up=args.up_level, max_depth_down=args.down_level)
     logger.info(f"db_config:: {db_config}")
+    
     if db_config:
         args.database = db_config.get('database') or args.database
         args.hostname = db_config.get('host') or args.hostname
